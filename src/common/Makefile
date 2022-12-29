@@ -4,7 +4,7 @@ else
 TARGET := libviz2d.so
 endif
 
-SRCS    := detail/clglcontext.cpp detail/clvacontext.cpp detail/nanovgcontext.cpp viz2d.cpp util.cpp nvg.cpp
+SRCS    := detail/clglcontext.cpp detail/clvacontext.cpp detail/nanovgcontext.cpp viz2d.cpp util.cpp nvg.cpp ../ext/midireceiver.cpp ../ext/midiplayback.cpp
 
 #precompiled headers
 HEADERS := 
@@ -13,7 +13,7 @@ DEPS    := ${SRCS:.cpp=.dep}
 
 CXXFLAGS += -fpic
 LDFLAGS += -shared
-LIBS += -lm
+LIBS += -lm -lrtmidi
 .PHONY: all release debug clean distclean 
 
 all: release

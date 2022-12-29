@@ -3,8 +3,11 @@
 #include "../common/viz2d.hpp"
 #include "../common/nvg.hpp"
 #include "../common/util.hpp"
+#include "../ext/midiplayback.hpp"
+
 
 #include <cmath>
+#include <csignal>
 #include <vector>
 #include <set>
 #include <string>
@@ -49,6 +52,10 @@ const unsigned long DIAG = hypot(double(WIDTH), double(HEIGHT));
 constexpr const char* OUTPUT_FILENAME = "optflow-demo.mkv";
 constexpr bool OFFSCREEN = false;
 constexpr int VA_HW_DEVICE_INDEX = 0;
+constexpr size_t FPS = 30;
+
+std::vector<MidiEvent> EVENTS;
+std::mutex EV_MTX;
 
 static cv::Ptr<kb::viz2d::Viz2D> v2d = new kb::viz2d::Viz2D(cv::Size(WIDTH, HEIGHT), cv::Size(WIDTH, HEIGHT), OFFSCREEN, "Sparse Optical Flow Demo");
 #ifndef __EMSCRIPTEN__
@@ -153,6 +160,51 @@ int kernel_size = std::max(int(DIAG / 100 % 2 == 0 ? DIAG / 100 + 1 : DIAG / 100
 int bloom_thresh = 210;
 //The intensity of the bloom filter
 float bloom_gain = 3;
+
+bool perform_layout = true;
+
+struct Range {
+    double min_;
+    double max_;
+};
+
+struct ControllerMapping : public std::map<uint16_t, std::function<void(double)>> {
+
+template<typename Tval, typename Twidget>
+void registerMapping(const uint16_t& controller, Tval* value, nanogui::detail::FormWidget<int>* widget, const Range& range) {
+    (*this)[controller] = [=](Tval val) {
+        *value = (range.min_ + (Tval(val) / 127.0) * (range.max_ - range.min_));
+        widget->set_value(*value);
+    };
+}
+
+template<typename Twidget>
+void registerMapping(const uint16_t& controller, int* value, nanogui::detail::FormWidget<Twidget>* widget, const Range& range) {
+    (*this)[controller] = [=](int val) {
+        *value = int(std::round((range.min_ + (val / 127.0) * (range.max_ - range.min_))));
+        widget->set_value(*value);
+    };
+}
+
+//template<typename Tval, typename Twidget>
+//void registerMapping(const uint16_t& controller, Tval* value, nanogui::detail::FormWidget<Twidget>* widget, const Range& range) {
+//    (*this)[controller] = [=](Tval val) {
+//        *value = Tval(range.min_ + (Tval(val) / 127.0) * (range.max_ - range.min_));
+//        widget->set_value(*value);
+//    };
+//}
+
+void update(const int16_t& controller, uint16_t value) {
+    (*this)[controller](value);
+}
+};
+
+ControllerMapping mapping;
+void postEvents(const std::vector<MidiEvent> &events) {
+    for(const auto& ev: events) {
+        mapping.update(ev.controller_, ev.value_);
+    }
+}
 
 void prepare_motion_mask(const cv::UMat& srcGrey, cv::UMat& motionMaskGrey) {
     static cv::Ptr<cv::BackgroundSubtractor> bg_subtrator = cv::createBackgroundSubtractorMOG2(100, 16.0, false);
@@ -341,28 +393,45 @@ void composite_layers(cv::UMat& background, const cv::UMat& foreground, const cv
     cv::add(background, post, dst);
 }
 
+//nanogui::detail::FormWidget<T>* makeFormVariable(const string &name, T &v, const T &min, const T &max, bool spinnable, const string &unit, const string tooltip, bool visible = true, bool enabled = true) {
+template<typename T>
+void makeMidiVariable(int16_t controller, const string &name, T &v, const T &min, const T &max, bool spinnable, const string &unit, const string tooltip, bool visible = true, bool enabled = true) {
+    mapping.registerMapping(controller, &v,
+            v2d->makeFormVariable(name, v, min, max, true, "", "Generate the foreground at this scale"),
+            {0.1f, 4.0f});
+}
+
+template<int>
+void makeMidiVariable(int16_t controller, const string &label, int& e, const std::vector<string>& items) {
+    mapping.registerMapping(controller, &e,
+            v2d->makeComboBox(label, e, items),
+            {0.1f, 4.0f});
+}
+
+void makeMidiVariable(int16_t controller, const string& label, nanogui::Color& color, const string& tooltip = "", std::function<void(const nanogui::Color)> fn = nullptr, bool visible = true, bool enabled = true) {
+    mapping.registerMapping(controller, &color,
+            v2d->makeColorPicker(label, color, tooltip, fn, visible, enabled),
+            {0.1f, 4.0f});
+}
+
 void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d, cv::Ptr<kb::viz2d::Viz2D> v2dMenu) {
     v2d->makeWindow(5, 30, "Effects");
 
     v2d->makeGroup("Foreground");
-    v2d->makeFormVariable("Scale", fg_scale, 0.1f, 4.0f, true, "", "Generate the foreground at this scale");
-    v2d->makeFormVariable("Loss", fg_loss, 0.1f, 99.9f, true, "%", "On every frame the foreground loses on brightness");
+    makeMidiVariable(12, "Scale", fg_scale, 0.1f, 4.0f, true, "", "Generate the foreground at this scale");
+    makeMidiVariable(13, "Loss", fg_loss, 0.1f, 99.9f, true, "%", "On every frame the foreground loses on brightness");
 
     v2d->makeGroup("Background");
-    v2d->makeComboBox("Mode",background_mode, {"Grey", "Color", "Value", "Black"});
+    makeMidiVariable<BackgroundModes>(1, "Mode",background_mode, {"Grey", "Color", "Value", "Black"});
 
     v2d->makeGroup("Points");
-    v2d->makeFormVariable("Max. Points", max_points, 10, 1000000, true, "", "The theoretical maximum number of points to track which is scaled by the density of detected points and therefor is usually much smaller");
-    v2d->makeFormVariable("Point Loss", point_loss, 0.0f, 100.0f, true, "%", "How many of the tracked points to lose intentionally");
+    makeMidiVariable(15, "Max. Points", max_points, 10, 1000000, true, "", "The theoretical maximum number of points to track which is scaled by the density of detected points and therefor is usually much smaller");
+    makeMidiVariable(16, "Point Loss", point_loss, 0.0f, 100.0f, true, "%", "How many of the tracked points to lose intentionally");
 
     v2d->makeGroup("Optical flow");
-    v2d->makeFormVariable("Max. Stroke Size", max_stroke, 1, 100, true, "px", "The theoretical maximum size of the drawing stroke which is scaled by the area of the convex hull of tracked points and therefor is usually much smaller");
-    v2d->makeColorPicker("Color", effect_color, "The primary effect color",[&](const nanogui::Color &c) {
-        effect_color[0] = c[0];
-        effect_color[1] = c[1];
-        effect_color[2] = c[2];
-    });
-    v2d->makeFormVariable("Alpha", alpha, 0.0f, 1.0f, true, "", "The opacity of the effect");
+    makeMidiVariable(20, "Max. Stroke Size", max_stroke, 1, 100, true, "px", "The theoretical maximum size of the drawing stroke which is scaled by the area of the convex hull of tracked points and therefor is usually much smaller");
+    makeMidiVariable(56, "Color", effect_color, "The primary effect color");
+    makeMidiVariable(14, "Alpha", alpha, 0.0f, 1.0f, true, "", "The opacity of the effect");
 
     v2d->makeWindow(220, 30, "Post Processing");
     auto* postPocMode = v2d->makeComboBox("Mode",post_proc_mode, {"Glow", "Bloom", "None"});
@@ -404,7 +473,7 @@ void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d, cv::Ptr<kb::viz2d::Viz2D> v2dMenu)
     v2d->makeWindow(220, 175, "Settings");
 
     v2d->makeGroup("Hardware Acceleration");
-    v2d->makeFormVariable("Enable", use_acceleration, "Enable or disable libva and OpenCL acceleration");
+    v2d->addVariable("Enable", use_acceleration, "Enable or disable libva and OpenCL acceleration");
 
     v2d->makeGroup("Scene Change Detection");
     v2d->makeFormVariable("Threshold", scene_change_thresh, 0.1f, 1.0f, true, "", "Peak threshold. Lowering it makes detection more sensitive");
@@ -413,8 +482,8 @@ void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d, cv::Ptr<kb::viz2d::Viz2D> v2dMenu)
     v2dMenu->makeWindow(8, 16, "Display");
 
     v2dMenu->makeGroup("Display");
-    v2dMenu->makeFormVariable("Show FPS", show_fps, "Enable or disable the On-screen FPS display");
-    v2dMenu->makeFormVariable("Stetch", stretch, "Stretch the frame buffer to the window size")->set_callback([=](const bool &s) {
+    v2dMenu->addVariable("Show FPS", show_fps, "Enable or disable the On-screen FPS display");
+    v2dMenu->addVariable("Stetch", stretch, "Stretch the frame buffer to the window size")->set_callback([=](const bool &s) {
         v2d->setStretching(s);
     });
 
@@ -498,16 +567,70 @@ void iteration() {
     //If onscreen rendering is enabled it displays the framebuffer in the native window. Returns false if the window was closed.
     if(!v2d->display())
         exit(0);
+
+}
+
+bool done;
+static void finish(int ignore) {
+    done = true;
 }
 int main(int argc, char **argv) {
     using namespace kb::viz2d;
 #ifndef __EMSCRIPTEN__
-    if (argc != 2) {
-        std::cerr << "Usage: optflow <input-video-file>" << endl;
+    if (argc != 3) {
+        std::cerr << "Usage: optflow <input-video-file> <midi-port>" << endl;
         exit(1);
     }
 #endif
+    done = false;
+    signal(SIGINT, finish);
+    signal(SIGTERM, finish);
+
     print_system_info();
+
+    MidiReceiver midi(atoi(argv[2]));
+
+    std::thread midiThread([&]() {
+        while (!done) {
+            auto tmp = midi.receive();
+            if (!tmp.empty()) {
+                std::unique_lock<std::mutex> lock(EV_MTX);
+                EVENTS = tmp;
+            }
+            usleep((1000000.0 / (FPS * 4.0)));
+        }
+    });
+
+    long long cnt = 0;
+    auto epoch = std::chrono::system_clock::now().time_since_epoch();
+    auto firstFrameTime = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count();
+
+    std::thread postThread([&]() {
+        while (!done) {
+            epoch = std::chrono::system_clock::now().time_since_epoch();
+            auto start = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count();
+            {
+                std::unique_lock<std::mutex> lock(EV_MTX);
+                postEvents(EVENTS);
+                EVENTS.clear();
+            }
+
+            epoch = std::chrono::system_clock::now().time_since_epoch();
+            auto dur = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count() - start;
+
+            if (dur < (1000000.0 / FPS))
+                usleep((1000000.0 / FPS) - dur);
+            else
+                std::cerr << "Underrun: " << (dur - (1000000.0 / FPS)) / 1000.0 << std::endl;
+            ++cnt;
+        }
+        epoch = std::chrono::system_clock::now().time_since_epoch();
+        auto lastFrameTime = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count();
+        auto total = lastFrameTime - firstFrameTime;
+        auto perfect = cnt * (1000000.0 / FPS);
+
+        std::cerr << "skew: " << (double) perfect / total << std::endl;
+    });
 
     if(!v2d->isOffscreen()) {
 #ifndef __EMSCRIPTEN__

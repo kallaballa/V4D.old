@@ -681,7 +681,7 @@ nanogui::Label* Viz2D::makeGroup(const string &label) {
     return form()->add_group(label);
 }
 
-nanogui::detail::FormWidget<bool>* Viz2D::makeFormVariable(const string &name, bool &v, const string &tooltip, bool visible, bool enabled) {
+nanogui::detail::FormWidget<bool>* Viz2D::addVariable(const string &name, bool &v, const string &tooltip, bool visible, bool enabled) {
     auto var = form()->add_variable(name, v);
     var->set_enabled(enabled);
     var->set_visible(visible);
@@ -690,7 +690,7 @@ nanogui::detail::FormWidget<bool>* Viz2D::makeFormVariable(const string &name, b
     return var;
 }
 
-nanogui::ColorPicker* Viz2D::makeColorPicker(const string& label, nanogui::Color& color, const string& tooltip, std::function<void(const nanogui::Color)> fn, bool visible, bool enabled) {
+nanogui::detail::FormWidget<nanogui::Color>* Viz2D::makeColorPicker(const string& label, nanogui::Color& color, const string& tooltip, std::function<void(const nanogui::Color)> fn, bool visible, bool enabled) {
     auto* colorPicker = form()->add_variable(label, color);
     colorPicker->set_enabled(enabled);
     colorPicker->set_visible(visible);

@@ -92,7 +92,7 @@ void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d) {
     v2d->makeWindow(8, 16, "Display");
 
     v2d->makeGroup("Display");
-    v2d->makeFormVariable("Show FPS", show_fps, "Enable or disable the On-screen FPS display");
+    v2d->addVariable("Show FPS", show_fps, "Enable or disable the On-screen FPS display");
 //    v2d->makeButton("Fullscreen", [=]() {
 //        v2d->setFullscreen(!v2d->isFullscreen());
 //    });
