@@ -12,14 +12,14 @@ NanoVGContext::NanoVGContext(Viz2D &v2d, NVGcontext *context, CLGLContext &fbCon
     CLGLContext::FrameBufferScope fbScope(clglContext_, tmp);
 }
 
-void NanoVGContext::render(std::function<void(const cv::Size&)> fn) {
+void NanoVGContext::render(Viz2D& v2d, std::function<void(Viz2D&, const cv::Size&)> fn) {
 #ifndef __EMSCRIPTEN__
     CLExecScope_t scope(clglContext_.getCLExecContext());
 #endif
     CLGLContext::GLScope glScope(clglContext_);
     NanoVGContext::Scope nvgScope(*this);
     kb::viz2d::nvg::detail::NVG::setCurrentContext(context_),
-    fn(clglContext_.getSize());
+    fn(v2d, clglContext_.getSize());
 }
 
 

@@ -33,7 +33,7 @@ public:
         }
     };
     NanoVGContext(Viz2D& v2d, NVGcontext *context, CLGLContext &fbContext);
-    void render(std::function<void(const cv::Size&)> fn);
+    void render(Viz2D& v2d, std::function<void(Viz2D&, const cv::Size&)> fn);
 private:
     void begin();
     void end();

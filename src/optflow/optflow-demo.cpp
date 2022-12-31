@@ -56,10 +56,8 @@ constexpr size_t FPS = 30;
 std::vector<MidiEvent> EVENTS;
 std::mutex EV_MTX;
 
-static cv::Ptr<kb::viz2d::Viz2D> v2d = new kb::viz2d::Viz2D(cv::Size(WIDTH, HEIGHT), cv::Size(WIDTH, HEIGHT), OFFSCREEN, "Sparse Optical Flow Demo");
-#ifndef __EMSCRIPTEN__
-static cv::Ptr<kb::viz2d::Viz2D> v2dMenu = new kb::viz2d::Viz2D(cv::Size(240, 360), cv::Size(240,360), false, "Display Settings");
-#else
+cv::Ptr<kb::viz2d::Viz2D> v2d = new kb::viz2d::Viz2D(cv::Size(WIDTH, HEIGHT), cv::Size(WIDTH, HEIGHT), OFFSCREEN, "Sparse Optical Flow Demo");
+#ifdef __EMSCRIPTEN__
 #  include <emscripten.h>
 #  include <emscripten/bind.h>
 #  include <fstream>
@@ -242,7 +240,7 @@ void glow_effect(const cv::UMat &src, cv::UMat &dst, const int ksize) {
     cv::bitwise_not(dst, dst);
 }
 
-void composite_layers(cv::UMat& background, const cv::UMat& foreground, const cv::UMat& frameBuffer, cv::UMat& dst, int kernelSize, float fgLossPercent, BackgroundModes bgMode, PostProcModes ppMode) {
+void composite_layers(cv::UMat& background, const cv::UMat& foreground, const cv::UMat& frameBuffer, cv::UMat& dst, int kernelSize, float fgLossPercent, BackgroundModes bgMode, PostProcModes ppMode, int bloomThresh, float bloomGain) {
     static cv::UMat tmp;
     static cv::UMat post;
     static cv::UMat backgroundGrey;
@@ -277,7 +275,7 @@ void composite_layers(cv::UMat& background, const cv::UMat& foreground, const cv
         glow_effect(foreground, post, kernelSize);
         break;
     case BLOOM:
-        bloom(foreground, post, v2d->value<int>("ksize"), v2d->value<int>("bloomThresh"), v2d->value<float>("bloomGain"));
+        bloom(foreground, post, kernelSize, bloomThresh, bloomGain);
         break;
     case NONE:
         foreground.copyTo(post);
@@ -289,7 +287,7 @@ void composite_layers(cv::UMat& background, const cv::UMat& foreground, const cv
     cv::add(background, post, dst);
 }
 
-void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d, cv::Ptr<kb::viz2d::Viz2D> v2dMenu) {
+void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d) {
     v2d->addWindow(5, 30, "Effects");
 
     v2d->addGroup("Foreground");
@@ -312,9 +310,9 @@ void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d, cv::Ptr<kb::viz2d::Viz2D> v2dMenu)
     auto* postPocMode = v2d->addFormWidget("ppMode", "Mode",GLOW, {"Glow", "Bloom", "None"});
     auto* kernelSize = v2d->addFormWidget("ksize", "Kernel Size", std::max(int(DIAG / 100 % 2 == 0 ? DIAG / 100 + 1 : DIAG / 100), 1), 1, 63, true, "", "Intensity of glow defined by kernel size");
     kernelSize->set_callback([=](const int& k) {
-        static int lastKernelSize = v2d->value<int>("ksize");
+        static int lastKernelSize = v2d->property<int>("ksize");
 
-        int& ksize = v2d->value<int>("ksize");
+        int& ksize = v2d->property<int>("ksize");
         if(k == lastKernelSize)
             return;
 
@@ -329,7 +327,7 @@ void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d, cv::Ptr<kb::viz2d::Viz2D> v2dMenu)
     auto* thresh = v2d->addFormWidget("bloomThresh", "Threshold", 210, 1, 255, true, "", "The lightness selection threshold", true, false);
     auto* gain = v2d->addFormWidget("bloomGain", "Gain", 3.0f, 0.1f, 20.0f, true, "", "Intensity of the effect defined by gain", true, false);
     postPocMode->set_callback([&,kernelSize, thresh, gain](const int& m) {
-        PostProcModes ppm = v2d->value<PostProcModes>("ppMode") = static_cast<PostProcModes>(m);
+        PostProcModes ppm = v2d->property<PostProcModes>("ppMode") = static_cast<PostProcModes>(m);
         if(ppm == BLOOM) {
             thresh->set_enabled(true);
             gain->set_enabled(true);
@@ -354,49 +352,52 @@ void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d, cv::Ptr<kb::viz2d::Viz2D> v2dMenu)
     v2d->addFormWidget("sceneThresh", "Threshold", 0.29f, 0.1f, 1.0f, true, "", "Peak threshold. Lowering it makes detection more sensitive");
     v2d->addFormWidget("sceneThreshDiff", "Threshold Diff", 0.1f, 0.1f, 1.0f, true, "", "Difference of peak thresholds. Lowering it makes detection more sensitive");
 
-    v2dMenu->addWindow(8, 16, "Display");
+    v2d->addWindow(8, 16, "Display");
 
-    v2dMenu->addGroup("Display");
-    v2dMenu->addFormWidget("showFPS", "Show FPS", true, "Enable or disable the On-screen FPS display");
-    v2dMenu->addFormWidget("stretch", "Stretch", false, "Stretch the frame buffer to the window size")->set_callback([=](const bool &s) {
+    v2d->addGroup("Display");
+    v2d->addFormWidget("showFPS", "Show FPS", true, "Enable or disable the On-screen FPS display");
+    v2d->addFormWidget("stretch", "Stretch", false, "Stretch the frame buffer to the window size")->set_callback([=](const bool &s) {
         v2d->setStretching(s);
     });
 
 #ifndef __EMSCRIPTEN__
-    v2dMenu->addButton("Fullscreen", [=]() {
+    v2d->addButton("Fullscreen", [=]() {
         v2d->setFullscreen(!v2d->isFullscreen());
     });
 
-    v2dMenu->addButton("Offscreen", [=]() {
+    v2d->addButton("Offscreen", [=]() {
         v2d->setOffscreen(!v2d->isOffscreen());
     });
 #endif
 }
 
 void iteration() {
-    //BGRA
-    static cv::UMat background, down;
-    static cv::UMat foreground(v2d->getFrameBufferSize(), CV_8UC4, cv::Scalar::all(0));
-    //RGB
-    static cv::UMat menuFrame;
-    //GREY
-    static cv::UMat downPrevGrey, downNextGrey, downMotionMaskGrey;
-    static vector<cv::Point2f> detectedPoints;
+    using namespace kb::viz2d;
 
-//    if(v2d->isAccelerated() != v2d->value<bool>("hwEnable"))
+//    if(v2d->isAccelerated() != v2d->property<bool>("hwEnable"))
 //        v2d->setAccelerated(false);
 
 #ifndef __EMSCRIPTEN__
     if(!v2d->capture())
         exit(0);
 #endif
+    v2d->clgl([](Viz2D& v2d, cv::UMat& frameBuffer) {
+        cv::UMat& down = v2d.buffer("down");
+        cv::UMat& background = v2d.buffer("background");
 
-    v2d->clgl([&](cv::UMat& frameBuffer) {
-        cv::resize(frameBuffer, down, cv::Size(v2d->getFrameBufferSize().width * v2d->value<float>("fgScale"), v2d->getFrameBufferSize().height * v2d->value<float>("fgScale")));
+        const float& fgScale = v2d.property<float>("fgScale");
+
+        cv::resize(frameBuffer, down, cv::Size(frameBuffer.size().width * fgScale, frameBuffer.size().height * fgScale));
         frameBuffer.copyTo(background);
     });
 
-    v2d->cl([&]() {
+    v2d->cl([](Viz2D& v2d) {
+        cv::UMat& down = v2d.buffer("down");
+        cv::UMat& downNextGrey = v2d.buffer("downNextGrey");
+        cv::UMat& downMotionMaskGrey = v2d.buffer("downMotionMaskGrey");
+
+        auto& detectedPoints = v2d.variable<vector<cv::Point2f>>("detectedPoints");
+
         cv::cvtColor(down, downNextGrey, cv::COLOR_RGBA2GRAY);
         //Subtract the background to create a motion mask
         prepare_motion_mask(downNextGrey, downMotionMaskGrey);
@@ -404,91 +405,84 @@ void iteration() {
         detect_points(downMotionMaskGrey, detectedPoints);
     });
 
-    v2d->nvg([&](const cv::Size& sz) {
-        v2d->clear();
+    v2d->nvg([](Viz2D& v2d, const cv::Size& sz) {
+        cv::UMat& downMotionMaskGrey = v2d.buffer("downMotionMaskGrey");
+        cv::UMat& downPrevGrey = v2d.buffer("downPrevGrey");
+        cv::UMat& downNextGrey = v2d.buffer("downNextGrey");
+
+        auto& detectedPoints = v2d.variable<vector<cv::Point2f>>("detectedPoints");
+
+        const float& sceneThresh = v2d.property<float>("sceneThresh");
+        const float& sceneThreshDiff = v2d.property<float>("sceneThreshDiff");
+        const float& alpha = v2d.property<float>("alpha");
+        const float& fgScale = v2d.property<float>("fgScale");
+        const float& maxStroke = v2d.property<int>("maxStroke");
+        const float& maxPoints = v2d.property<int>("maxPoints");
+        const float& pointLoss = v2d.property<float>("pointLoss");
+        const nanogui::Color& c = v2d.property<nanogui::Color>("color");
+
+        nvg::clear();
         if (!downPrevGrey.empty()) {
             //We don't want the algorithm to get out of hand when there is a scene change, so we suppress it when we detect one.
-            if (!detect_scene_change(downMotionMaskGrey, v2d->value<float>("sceneThresh"), v2d->value<float>("sceneThreshDiff"))) {
+            if (!detect_scene_change(downMotionMaskGrey, sceneThresh, sceneThreshDiff)) {
                 //Visualize the sparse optical flow using nanovg
-                nanogui::Color& c = v2d->value<nanogui::Color>("color");
-                cv::Scalar color = cv::Scalar(c.b() * 255.0f, c.g() * 255.0f, c.r() * 255.0f, v2d->value<float>("alpha") * 255.0f);
-                visualize_sparse_optical_flow(downPrevGrey, downNextGrey, detectedPoints, v2d->value<float>("fgScale"), v2d->value<int>("maxStroke"), color, v2d->value<int>("maxPoints"), v2d->value<float>("pointLoss"));
+                cv::Scalar color = cv::Scalar(c.b() * 255.0f, c.g() * 255.0f, c.r() * 255.0f, alpha * 255.0f);
+                visualize_sparse_optical_flow(downPrevGrey, downNextGrey, detectedPoints, fgScale, maxStroke, color, maxPoints, pointLoss);
             }
         }
     });
 
-    downPrevGrey = downNextGrey.clone();
+    v2d->cl([](Viz2D& v2d){
+        v2d.buffer("downPrevGrey") = v2d.buffer("downNextGrey").clone();
+    });
 
-    v2d->clgl([&](cv::UMat& frameBuffer){
+    v2d->clgl([](Viz2D& v2d, cv::UMat& frameBuffer){
+        cv::UMat& foreground = v2d.allocate_once("foreground", frameBuffer.size(), frameBuffer.type(), cv::Scalar::all(0));
+        cv::UMat& background = v2d.buffer("background");
+        cv::UMat& menuFrame = v2d.buffer("menuFrame");
+
+        const int& ksize = v2d.property<int>("ksize");
+        const float& fgLoss = v2d.property<float>("fgLoss");
+        const int& bloomThresh = v2d.property<int>("bloomThresh");
+        const float& bloomGain = v2d.property<float>("bloomGain");
+        const BackgroundModes& bgMode = v2d.property<BackgroundModes>("bgMode");
+        const PostProcModes& ppMode = v2d.property<PostProcModes>("ppMode");
+
         //Put it all together (OpenCL)
-        composite_layers(background, foreground, frameBuffer, frameBuffer, v2d->value<int>("ksize"), v2d->value<float>("fgLoss"), v2d->value<BackgroundModes>("bgMode"), v2d->value<PostProcModes>("ppMode"));
+        composite_layers(background, foreground, frameBuffer, frameBuffer, ksize, fgLoss, bgMode, ppMode, bloomThresh, bloomGain);
 #ifndef __EMSCRIPTEN__
         cvtColor(frameBuffer, menuFrame, cv::COLOR_BGRA2RGB);
 #endif
     });
 
-//    update_fps(v2d, v2dMenu->value<bool>("showFPS"));
+    update_fps(v2d, v2d->property<bool>("showFPS"));
 
 #ifndef __EMSCRIPTEN__
     v2d->write();
-
-    v2dMenu->capture([&](cv::UMat& videoFrame) {
-        menuFrame.copyTo(videoFrame);
-    });
-
-    if(!v2dMenu->display())
-        exit(0);
 #endif
 
     //If onscreen rendering is enabled it displays the framebuffer in the native window. Returns false if the window was closed.
     if(!v2d->display())
         exit(0);
-
 }
 
 bool done;
 static void finish(int ignore) {
     done = true;
 }
-int main(int argc, char **argv) {
-    using namespace kb::viz2d;
-#ifndef __EMSCRIPTEN__
-    if (argc != 3) {
-        std::cerr << "Usage: optflow <input-video-file> <midi-port>" << endl;
-        exit(1);
-    }
-#endif
-    done = false;
-    signal(SIGINT, finish);
-    signal(SIGTERM, finish);
 
-    print_system_info();
-
-    MidiReceiver midi(atoi(argv[2]));
-
+void startMidi(int port) {
     std::thread midiThread([&]() {
-        while (!done) {
-            auto tmp = midi.receive();
-            if (!tmp.empty()) {
-                std::unique_lock<std::mutex> lock(EV_MTX);
-                EVENTS = tmp;
-            }
-            usleep((1000000.0 / (FPS * 4.0)));
-        }
-    });
+        MidiReceiver midi(port);
+        long long cnt = 0;
+        auto epoch = std::chrono::system_clock::now().time_since_epoch();
+        auto firstFrameTime = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count();
 
-    long long cnt = 0;
-    auto epoch = std::chrono::system_clock::now().time_since_epoch();
-    auto firstFrameTime = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count();
-
-    std::thread postThread([&]() {
         while (!done) {
             epoch = std::chrono::system_clock::now().time_since_epoch();
             auto start = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count();
             {
-                std::unique_lock<std::mutex> lock(EV_MTX);
-                postEvents(EVENTS);
-                EVENTS.clear();
+                postEvents(midi.receive());
             }
 
             epoch = std::chrono::system_clock::now().time_since_epoch();
@@ -507,14 +501,27 @@ int main(int argc, char **argv) {
 
         std::cerr << "skew: " << (double) perfect / total << std::endl;
     });
+    midiThread.detach();
+}
+
+int main(int argc, char **argv) {
+    using namespace kb::viz2d;
+#ifndef __EMSCRIPTEN__
+    if (argc != 3) {
+        std::cerr << "Usage: optflow <input-video-file> <midi-port>" << endl;
+        exit(1);
+    }
+#endif
+    done = false;
+    signal(SIGINT, finish);
+    signal(SIGTERM, finish);
+
+    print_system_info();
+
+//    startMidi(atoi(argv[2]));
 
     if(!v2d->isOffscreen()) {
-#ifndef __EMSCRIPTEN__
-        setup_gui(v2d, v2dMenu);
-        v2dMenu->setVisible(true);
-#else
-        setup_gui(v2d, v2d);
-#endif
+        setup_gui(v2d);
         v2d->setVisible(true);
     }
 

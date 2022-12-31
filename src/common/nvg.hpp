@@ -239,6 +239,7 @@ Paint imagePattern(float ox, float oy, float ex, float ey, float angle, int imag
 void scissor(float x, float y, float w, float h);
 void intersectScissor(float x, float y, float w, float h);
 void resetScissor();
+void clear(const cv::Scalar &rgba = cv::Scalar::all(0));
 }
 }
 }

@@ -51,7 +51,7 @@ cv::Scalar color_convert(const cv::Scalar& src, cv::ColorConversionCodes code) {
     return dst;
 }
 
-std::function<bool(Viz2DWindow*, Viz2DWindow*)> Viz2DWindow::viz2DWin_Xcomparator([](Viz2DWindow* lhs, Viz2DWindow* rhs){ return lhs->position()[0] < rhs->position()[0]; });
+std::function<bool(Viz2DWindow*, Viz2DWindow*)> Viz2DWindow::viz2DWin_Xcomparator([](Viz2DWindow* lhs, Viz2DWindow* rhs){ return lhs != nullptr && rhs != nullptr && lhs->position()[0] < rhs->position()[0]; });
 std::set<Viz2DWindow*, decltype(Viz2DWindow::viz2DWin_Xcomparator)> Viz2DWindow::all_windows_xsorted_(viz2DWin_Xcomparator);
 
 Viz2DWindow::Viz2DWindow(nanogui::Screen *screen, int x, int y, const string &title) :
@@ -360,34 +360,32 @@ void Viz2D::setVideoFrameSize(const cv::Size& sz) {
     clva().setVideoFrameSize(sz);
 }
 
-void Viz2D::gl(std::function<void(const cv::Size&)> fn) {
+void Viz2D::gl(std::function<void(Viz2D&, const cv::Size&)> fn) {
     auto fbSize = getFrameBufferSize();
 #ifndef __EMSCRIPTEN__
     detail::CLExecScope_t scope(clgl().getCLExecContext());
 #endif
     detail::CLGLContext::GLScope glScope(clgl());
-    fn(fbSize);
+    fn(*this, fbSize);
 }
 
-void Viz2D::cl(std::function<void()> fn) {
+void Viz2D::cl(std::function<void(Viz2D&)> fn) {
 #ifndef __EMSCRIPTEN__
     detail::CLExecScope_t scope(clgl().getCLExecContext());
 #endif
-    fn();
+    fn(*this);
 }
 
-void Viz2D::cpu(std::function<void()> fn) {
-    cv::ocl::setUseOpenCL(false);
-    fn();
-    cv::ocl::setUseOpenCL(true);
+void Viz2D::cpu(std::function<void(Viz2D&)> fn) {
+    fn(*this);
 }
 
-void Viz2D::clgl(std::function<void(cv::UMat&)> fn) {
-    clgl().execute(fn);
+void Viz2D::clgl(std::function<void(Viz2D&, cv::UMat&)> fn) {
+    clgl().execute(*this, fn);
 }
 
-void Viz2D::nvg(std::function<void(const cv::Size&)> fn) {
-    nvg().render(fn);
+void Viz2D::nvg(std::function<void(Viz2D&, const cv::Size&)> fn) {
+    nvg().render(*this,fn);
 }
 
 bool Viz2D::capture() {
@@ -460,15 +458,6 @@ cv::VideoCapture& Viz2D::makeCapture(const string &inputFilename) {
     return *capture_;
 }
 #endif
-
-void Viz2D::clear(const cv::Scalar &rgba) {
-    const float &r = rgba[0] / 255.0f;
-    const float &g = rgba[1] / 255.0f;
-    const float &b = rgba[2] / 255.0f;
-    const float &a = rgba[3] / 255.0f;
-    GL_CHECK(glClearColor(r, g, b, a));
-    GL_CHECK(glClear(GL_COLOR_BUFFER_BIT));
-}
 
 void Viz2D::setMouseDrag(bool d) {
     mouseDrag_ = d;

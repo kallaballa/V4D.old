@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <typeindex>
 #include <typeinfo>
-#include <unordered_map>
+#include <thread>
 #include <any>
 #include <iostream>
 #include <set>
@@ -42,53 +42,42 @@ void gl_check_error(const std::filesystem::path &file, unsigned int line, const 
 void error_callback(int error, const char *description);
 
 class BufferStore {
-    std::map<size_t, std::map<string, cv::UMat>> bufMap_;
-    std::map<size_t, std::map<string, void*>> varMap_;
-    std::map<string, cv::UMat>& getBufMap(const size_t& i) {
-        return bufMap_[i];
+    std::map<std::thread::id, std::map<string, cv::UMat>> bufMap_;
+    std::map<std::thread::id, std::map<string, void*>> varMap_;
+    std::map<string, cv::UMat>& getBufMap() {
+        return bufMap_[std::this_thread::get_id()];
     }
 
-    std::map<string, void*>& getVarMap(const size_t& i) {
-        return varMap_[i];
+    std::map<string, void*>& getVarMap() {
+        return varMap_[std::this_thread::get_id()];
     }
 
 public:
-    void allocate(const size_t& i, const string& name, const cv::Size& sz, int type, const cv::Scalar& defaultValue, cv::UMatUsageFlags usageFlags = cv::USAGE_DEFAULT) {
-        getBufMap(i)[name].create(sz, type, usageFlags);
+    cv::UMat& allocate_once(const string& name, const cv::Size& sz, int type, const cv::Scalar& defaultValue, cv::UMatUsageFlags usageFlags = cv::USAGE_DEFAULT) {
+        auto& buf = getBufMap()[name];
+        if(buf.empty())
+            buf.create(sz, type, usageFlags);
+
+        return buf;
     }
 
-    cv::UMat& buf(const size_t& i, const string& name) {
+    cv::UMat& buffer(const string& name) {
         std::stringstream ss;
-        return getBufMap(i)[name];
+        return getBufMap()[name];
     }
 
-    template <typename T> T& var(const size_t& i, const string& name) {
-        auto it = getVarMap(i).find(name);
-        if(it != getVarMap(i).end()) {
+    template <typename T> T& variable(const string& name) {
+        auto it = getVarMap().find(name);
+        if(it != getVarMap().end()) {
             return *static_cast<T*>((*it).second);
         } else {
             auto* p = new T();
-            getVarMap(i)[name] = p;
+            getVarMap()[name] = p;
             return *p;
         }
     }
 };
-
-static BufferStore store;
-
 }
-
-//void allocate(const size_t& i, const string& name, const cv::Size& sz, int type, const cv::Scalar& defaultValue, cv::UMatUsageFlags usageFlags = cv::USAGE_DEFAULT) {
-//    detail::store.allocate(i, name, sz, type, defaultValue, usageFlags);
-//}
-//
-//cv::UMat& buf(const size_t& i, const string& name) {
-//    return detail::store.buf(i, name);
-//}
-//
-//template <typename T> T& var(const size_t& i, const string& name) {
-//    return detail::store.var<T>(i, name);
-//}
 
 cv::Scalar color_convert(const cv::Scalar& src, cv::ColorConversionCodes code);
 
@@ -278,6 +267,7 @@ private:
     bool mouseDrag_ = false;
     nanogui::Screen* screen_ = nullptr;
     Properties properties_;
+    BufferStore store;
 public:
     Viz2D(const cv::Size &initialSize, const cv::Size& frameBufferSize, bool offscreen, const string &title, int major = 4, int minor = 6, int samples = 0, bool debug = false);
     virtual ~Viz2D();
@@ -286,13 +276,12 @@ public:
 
     cv::ogl::Texture2D& texture();
 
-    void gl(std::function<void(const cv::Size&)> fn);
-    void cl(std::function<void()> fn);
-    void cpu(std::function<void()> fn);
-    void clgl(std::function<void(cv::UMat&)> fn);
-    void nvg(std::function<void(const cv::Size&)> fn);
+    void gl(std::function<void(Viz2D&, const cv::Size&)> fn);
+    void cl(std::function<void(Viz2D&)> fn);
+    void cpu(std::function<void(Viz2D&)> fn);
+    void clgl(std::function<void(Viz2D&, cv::UMat&)> fn);
+    void nvg(std::function<void(Viz2D&, const cv::Size&)> fn);
 
-    void clear(const cv::Scalar& rgba = cv::Scalar(0,0,0,255));
     bool capture();
     bool capture(std::function<void(cv::UMat&)> fn);
     void write();
@@ -382,10 +371,6 @@ public:
         return prop;
     }
 
-    Property& property(const string& name) {
-        return properties_.property(name);
-    }
-
     std::vector<std::string> names() {
         return properties_.names();
     }
@@ -395,13 +380,25 @@ public:
         properties_.propagate<T>(name, value);
     }
 
-    template<typename T, typename std::enable_if<std::is_enum<T>::value >::type* = nullptr> T& value(const string& name) {
+    template<typename T, typename std::enable_if<std::is_enum<T>::value >::type* = nullptr> T& property(const string& name) {
         int& propVal = std::any_cast<int&>(properties_.property(name).value_);
         return *reinterpret_cast<T*>(&propVal);
     }
 
-    template<typename T, typename std::enable_if<!std::is_enum<T>::value >::type* = nullptr> T& value(const string& name) {
+    template<typename T, typename std::enable_if<!std::is_enum<T>::value >::type* = nullptr> T& property(const string& name) {
         return std::any_cast<T&>(properties_.property(name).value_);
+    }
+
+    cv::UMat& allocate_once(const string& name, const cv::Size& sz, int type, const cv::Scalar& defaultValue, cv::UMatUsageFlags usageFlags = cv::USAGE_DEFAULT) {
+        return store.allocate_once(name, sz, type, defaultValue, usageFlags);
+    }
+
+    cv::UMat& buffer(const string& name) {
+        return store.buffer(name);
+    }
+
+    template <typename T> T& variable(const string& name) {
+        return store.variable<T>(name);
     }
 private:
     nanogui::detail::FormWidget<bool>* addVariable(const string &name, bool &v, const string &tooltip = "", bool visible = true, bool enabled = true);

@@ -74,7 +74,7 @@ public:
     CLGLContext(const cv::Size& frameBufferSize);
     virtual ~CLGLContext();
     cv::Size getSize();
-    void execute(std::function<void(cv::UMat&)> fn);
+    void execute(Viz2D& viz2d, std::function<void(Viz2D&, cv::UMat&)> fn);
 protected:
     void begin();
     void end();

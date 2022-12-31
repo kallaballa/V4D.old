@@ -47,13 +47,13 @@ cv::Size CLGLContext::getSize() {
     return frameBufferSize_;
 }
 
-void CLGLContext::execute(std::function<void(cv::UMat&)> fn) {
+void CLGLContext::execute(Viz2D& v2d, std::function<void(Viz2D&, cv::UMat&)> fn) {
 #ifndef __EMSCRIPTEN__
     CLExecScope_t clExecScope(getCLExecContext());
 #endif
     CLGLContext::GLScope glScope(*this);
     CLGLContext::FrameBufferScope fbScope(*this, frameBuffer_);
-    fn(frameBuffer_);
+    fn(v2d, frameBuffer_);
 }
 
 cv::ogl::Texture2D& CLGLContext::getTexture2D() {

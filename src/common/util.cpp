@@ -60,7 +60,7 @@ void update_fps(cv::Ptr<kb::viz2d::Viz2D> v2d, bool graphically) {
         }
 
         if (graphically) {
-            v2d->nvg([&](const cv::Size &size) {
+            v2d->nvg([&](kb::viz2d::Viz2D& v2d, const cv::Size &size) {
                 using namespace kb;
                 string text = "FPS: " + std::to_string(fps);
                 nvg::beginPath();
