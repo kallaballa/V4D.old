@@ -52,8 +52,8 @@ bool update_stars = true;
 bool update_perspective = true;
 
 void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d) {
-    v2d->makeWindow(5, 30, "Effect");
-    v2d->makeGroup("Text Crawl");
+    v2d->addWindow(5, 30, "Effect");
+    v2d->addGroup("Text Crawl");
     v2d->makeFormVariable("Font Size", font_size, 1.0f, 100.0f, true, "pt", "Font size of the text crawl");
     v2d->makeFormVariable("Warp Ratio", warp_ratio, 0.1f, 1.0f, true, "", "The ratio of start width to end width of a crawling line")->set_callback([&](const float &w) {
         update_perspective = true;
@@ -67,7 +67,7 @@ void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d) {
     });
     v2d->makeFormVariable("Alpha", text_alpha, 0.0f, 1.0f, true, "", "The opacity of the text");
 
-    v2d->makeGroup("Stars");
+    v2d->addGroup("Stars");
     v2d->makeFormVariable("Min Star Size", min_star_size, 0.5f, 1.0f, true, "px", "Generate stars with this minimum size")->set_callback([](const float &s) {
         update_stars = true;
         min_star_size = s;
@@ -89,9 +89,9 @@ void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d) {
         star_alpha = a;
     });
 
-    v2d->makeWindow(8, 16, "Display");
+    v2d->addWindow(8, 16, "Display");
 
-    v2d->makeGroup("Display");
+    v2d->addGroup("Display");
     v2d->addVariable("Show FPS", show_fps, "Enable or disable the On-screen FPS display");
 //    v2d->makeButton("Fullscreen", [=]() {
 //        v2d->setFullscreen(!v2d->isFullscreen());

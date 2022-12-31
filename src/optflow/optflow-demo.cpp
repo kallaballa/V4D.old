@@ -5,7 +5,6 @@
 #include "../common/util.hpp"
 #include "../ext/midiplayback.hpp"
 
-
 #include <cmath>
 #include <csignal>
 #include <vector>
@@ -93,116 +92,13 @@ EMSCRIPTEN_BINDINGS(my_module)
 }
 #endif
 
-/** Visualization parameters **/
-
-// Generate the foreground at this scale.
-#ifndef __EMSCRIPTEN__
-float fg_scale = 0.5f;
-#else
-float fg_scale = 0.5f;
-#endif
-// On every frame the foreground loses on brightness. specifies the loss in percent.
-#ifndef __EMSCRIPTEN__
-float fg_loss = 2.5;
-#else
-float fg_loss = 10.0;
-#endif
-//Convert the background to greyscale
-BackgroundModes background_mode = GREY;
-// Peak thresholds for the scene change detection. Lowering them makes the detection more sensitive but
-// the default should be fine.
-float scene_change_thresh = 0.29f;
-float scene_change_thresh_diff = 0.1f;
-// The theoretical maximum number of points to track which is scaled by the density of detected points
-// and therefor is usually much smaller.
-#ifndef __EMSCRIPTEN__
-int max_points = 250000;
-#else
-int max_points = 10000;
-#endif
-// How many of the tracked points to lose intentionally, in percent.
-#ifndef __EMSCRIPTEN__
-float point_loss = 25;
-#else
-float point_loss = 10;
-#endif
-// The theoretical maximum size of the drawing stroke which is scaled by the area of the convex hull
-// of tracked points and therefor is usually much smaller.
-#ifndef __EMSCRIPTEN__
-int max_stroke = 14;
-#else
-int max_stroke = 2;
-#endif
-// Keep alpha separate for the GUI
-#ifndef __EMSCRIPTEN__
-float alpha = 0.1f;
-#else
-float alpha = 1.0f;
-#endif
-
-// Red, green, blue and alpha. All from 0.0f to 1.0f
-nanogui::Color effect_color(1.0f, 0.75f, 0.4f, 1.0f);
-//display on-screen FPS
-bool show_fps = true;
-//Stretch frame buffer to window size
-bool stretch = false;
-//Use OpenCL or not
-bool use_acceleration = true;
-//The post processing mode
-#ifndef __EMSCRIPTEN__
-PostProcModes post_proc_mode = GLOW;
-#else
-PostProcModes post_proc_mode = NONE;
-#endif
-// Intensity of glow or bloom defined by kernel size. The default scales with the image diagonal.
-int kernel_size = std::max(int(DIAG / 100 % 2 == 0 ? DIAG / 100 + 1 : DIAG / 100), 1);
-//The lightness selection threshold
-int bloom_thresh = 210;
-//The intensity of the bloom filter
-float bloom_gain = 3;
-
-bool perform_layout = true;
-
-struct Range {
-    double min_;
-    double max_;
-};
-
-struct ControllerMapping : public std::map<uint16_t, std::function<void(double)>> {
-
-template<typename Tval, typename Twidget>
-void registerMapping(const uint16_t& controller, Tval* value, nanogui::detail::FormWidget<int>* widget, const Range& range) {
-    (*this)[controller] = [=](Tval val) {
-        *value = (range.min_ + (Tval(val) / 127.0) * (range.max_ - range.min_));
-        widget->set_value(*value);
-    };
-}
-
-template<typename Twidget>
-void registerMapping(const uint16_t& controller, int* value, nanogui::detail::FormWidget<Twidget>* widget, const Range& range) {
-    (*this)[controller] = [=](int val) {
-        *value = int(std::round((range.min_ + (val / 127.0) * (range.max_ - range.min_))));
-        widget->set_value(*value);
-    };
-}
-
-//template<typename Tval, typename Twidget>
-//void registerMapping(const uint16_t& controller, Tval* value, nanogui::detail::FormWidget<Twidget>* widget, const Range& range) {
-//    (*this)[controller] = [=](Tval val) {
-//        *value = Tval(range.min_ + (Tval(val) / 127.0) * (range.max_ - range.min_));
-//        widget->set_value(*value);
-//    };
-//}
-
-void update(const int16_t& controller, uint16_t value) {
-    (*this)[controller](value);
-}
-};
-
-ControllerMapping mapping;
 void postEvents(const std::vector<MidiEvent> &events) {
+    std::vector<std::string> names = v2d->names();
     for(const auto& ev: events) {
-        mapping.update(ev.controller_, ev.value_);
+        if(ev.controller_ < names.size()) {
+            cerr << names[ev.controller_] << ev.value_ << 127.0 << endl;
+            v2d->propagate(names[ev.controller_], ev.value_, 127.0);
+        }
     }
 }
 
@@ -228,7 +124,7 @@ void detect_points(const cv::UMat& srcMotionMaskGrey, vector<cv::Point2f>& point
     }
 }
 
-bool detect_scene_change(const cv::UMat& srcMotionMaskGrey, const float thresh, const float theshDiff) {
+bool detect_scene_change(const cv::UMat& srcMotionMaskGrey, const float& thresh, const float& theshDiff) {
     static float last_movement = 0;
 
     float movement = cv::countNonZero(srcMotionMaskGrey) / double(srcMotionMaskGrey.cols * srcMotionMaskGrey.rows);
@@ -381,7 +277,7 @@ void composite_layers(cv::UMat& background, const cv::UMat& foreground, const cv
         glow_effect(foreground, post, kernelSize);
         break;
     case BLOOM:
-        bloom(foreground, post, kernelSize, bloom_thresh, bloom_gain);
+        bloom(foreground, post, v2d->value<int>("ksize"), v2d->value<int>("bloomThresh"), v2d->value<float>("bloomGain"));
         break;
     case NONE:
         foreground.copyTo(post);
@@ -393,67 +289,48 @@ void composite_layers(cv::UMat& background, const cv::UMat& foreground, const cv
     cv::add(background, post, dst);
 }
 
-//nanogui::detail::FormWidget<T>* makeFormVariable(const string &name, T &v, const T &min, const T &max, bool spinnable, const string &unit, const string tooltip, bool visible = true, bool enabled = true) {
-template<typename T>
-void makeMidiVariable(int16_t controller, const string &name, T &v, const T &min, const T &max, bool spinnable, const string &unit, const string tooltip, bool visible = true, bool enabled = true) {
-    mapping.registerMapping(controller, &v,
-            v2d->makeFormVariable(name, v, min, max, true, "", "Generate the foreground at this scale"),
-            {0.1f, 4.0f});
-}
-
-template<int>
-void makeMidiVariable(int16_t controller, const string &label, int& e, const std::vector<string>& items) {
-    mapping.registerMapping(controller, &e,
-            v2d->makeComboBox(label, e, items),
-            {0.1f, 4.0f});
-}
-
-void makeMidiVariable(int16_t controller, const string& label, nanogui::Color& color, const string& tooltip = "", std::function<void(const nanogui::Color)> fn = nullptr, bool visible = true, bool enabled = true) {
-    mapping.registerMapping(controller, &color,
-            v2d->makeColorPicker(label, color, tooltip, fn, visible, enabled),
-            {0.1f, 4.0f});
-}
-
 void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d, cv::Ptr<kb::viz2d::Viz2D> v2dMenu) {
-    v2d->makeWindow(5, 30, "Effects");
+    v2d->addWindow(5, 30, "Effects");
 
-    v2d->makeGroup("Foreground");
-    makeMidiVariable(12, "Scale", fg_scale, 0.1f, 4.0f, true, "", "Generate the foreground at this scale");
-    makeMidiVariable(13, "Loss", fg_loss, 0.1f, 99.9f, true, "%", "On every frame the foreground loses on brightness");
+    v2d->addGroup("Foreground");
+    v2d->addFormWidget("fgScale", "Scale", 0.5f, 0.1f, 4.0f, true, "", "Generate the foreground at this scale");
+    v2d->addFormWidget("fgLoss", "Loss", 2.5f, 0.1f, 99.9f, true, "%", "On every frame the foreground loses on brightness");
 
-    v2d->makeGroup("Background");
-    makeMidiVariable<BackgroundModes>(1, "Mode",background_mode, {"Grey", "Color", "Value", "Black"});
+    v2d->addGroup("Background");
+    v2d->addFormWidget("bgMode", "Mode", GREY, {"Grey", "Color", "Value", "Black"});
 
-    v2d->makeGroup("Points");
-    makeMidiVariable(15, "Max. Points", max_points, 10, 1000000, true, "", "The theoretical maximum number of points to track which is scaled by the density of detected points and therefor is usually much smaller");
-    makeMidiVariable(16, "Point Loss", point_loss, 0.0f, 100.0f, true, "%", "How many of the tracked points to lose intentionally");
+    v2d->addGroup("Points");
+    v2d->addFormWidget("maxPoints", "Max. Points", 250000, 10, 1000000, true, "", "The theoretical maximum number of points to track which is scaled by the density of detected points and therefor is usually much smaller");
+    v2d->addFormWidget("pointLoss", "Point Loss", 25.0f, 0.0f, 100.0f, true, "%", "How many of the tracked points to lose intentionally");
 
-    v2d->makeGroup("Optical flow");
-    makeMidiVariable(20, "Max. Stroke Size", max_stroke, 1, 100, true, "px", "The theoretical maximum size of the drawing stroke which is scaled by the area of the convex hull of tracked points and therefor is usually much smaller");
-    makeMidiVariable(56, "Color", effect_color, "The primary effect color");
-    makeMidiVariable(14, "Alpha", alpha, 0.0f, 1.0f, true, "", "The opacity of the effect");
+    v2d->addGroup("Optical flow");
+    v2d->addFormWidget("maxStroke", "Max. Stroke Size", 14, 1, 100, true, "px", "The theoretical maximum size of the drawing stroke which is scaled by the area of the convex hull of tracked points and therefor is usually much smaller");
+    v2d->addFormWidget("color", "Color", nanogui::Color(1.0f, 0.75f, 0.4f, 1.0f), "The primary effect color");
+    v2d->addFormWidget("alpha", "Alpha", 0.1f, 0.0f, 1.0f, true, "", "The opacity of the effect");
 
-    v2d->makeWindow(220, 30, "Post Processing");
-    auto* postPocMode = v2d->makeComboBox("Mode",post_proc_mode, {"Glow", "Bloom", "None"});
-    auto* kernelSize = v2d->makeFormVariable("Kernel Size", kernel_size, 1, 63, true, "", "Intensity of glow defined by kernel size");
+    v2d->addWindow(220, 30, "Post Processing");
+    auto* postPocMode = v2d->addFormWidget("ppMode", "Mode",GLOW, {"Glow", "Bloom", "None"});
+    auto* kernelSize = v2d->addFormWidget("ksize", "Kernel Size", std::max(int(DIAG / 100 % 2 == 0 ? DIAG / 100 + 1 : DIAG / 100), 1), 1, 63, true, "", "Intensity of glow defined by kernel size");
     kernelSize->set_callback([=](const int& k) {
-        static int lastKernelSize = kernel_size;
+        static int lastKernelSize = v2d->value<int>("ksize");
 
+        int& ksize = v2d->value<int>("ksize");
         if(k == lastKernelSize)
             return;
 
         if(k <= lastKernelSize) {
-            kernel_size = std::max(int(k % 2 == 0 ? k - 1 : k), 1);
+            ksize = std::max(int(k % 2 == 0 ? k - 1 : k), 1);
         } else if(k > lastKernelSize)
-            kernel_size = std::max(int(k % 2 == 0 ? k + 1 : k), 1);
+            ksize = std::max(int(k % 2 == 0 ? k + 1 : k), 1);
 
         lastKernelSize = k;
-        kernelSize->set_value(kernel_size);
+        kernelSize->set_value(ksize);
     });
-    auto* thresh = v2d->makeFormVariable("Threshold", bloom_thresh, 1, 255, true, "", "The lightness selection threshold", true, false);
-    auto* gain = v2d->makeFormVariable("Gain", bloom_gain, 0.1f, 20.0f, true, "", "Intensity of the effect defined by gain", true, false);
+    auto* thresh = v2d->addFormWidget("bloomThresh", "Threshold", 210, 1, 255, true, "", "The lightness selection threshold", true, false);
+    auto* gain = v2d->addFormWidget("bloomGain", "Gain", 3.0f, 0.1f, 20.0f, true, "", "Intensity of the effect defined by gain", true, false);
     postPocMode->set_callback([&,kernelSize, thresh, gain](const int& m) {
-        if(post_proc_mode == BLOOM) {
+        PostProcModes ppm = v2d->value<PostProcModes>("ppMode") = static_cast<PostProcModes>(m);
+        if(ppm == BLOOM) {
             thresh->set_enabled(true);
             gain->set_enabled(true);
         } else {
@@ -461,38 +338,36 @@ void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d, cv::Ptr<kb::viz2d::Viz2D> v2dMenu)
             gain->set_enabled(false);
         }
 
-        if(post_proc_mode == NONE) {
+        if(ppm == NONE) {
             kernelSize->set_enabled(false);
         } else {
             kernelSize->set_enabled(true);
         }
-        //FIXME why is this required?
-        post_proc_mode = static_cast<PostProcModes>(m);
     });
 
-    v2d->makeWindow(220, 175, "Settings");
+    v2d->addWindow(220, 175, "Settings");
 
-    v2d->makeGroup("Hardware Acceleration");
-    v2d->addVariable("Enable", use_acceleration, "Enable or disable libva and OpenCL acceleration");
+    v2d->addGroup("Hardware Acceleration");
+    v2d->addFormWidget("hwEnable", "Enable", true, "Enable or disable libva and OpenCL acceleration");
 
-    v2d->makeGroup("Scene Change Detection");
-    v2d->makeFormVariable("Threshold", scene_change_thresh, 0.1f, 1.0f, true, "", "Peak threshold. Lowering it makes detection more sensitive");
-    v2d->makeFormVariable("Threshold Diff", scene_change_thresh_diff, 0.1f, 1.0f, true, "", "Difference of peak thresholds. Lowering it makes detection more sensitive");
+    v2d->addGroup("Scene Change Detection");
+    v2d->addFormWidget("sceneThresh", "Threshold", 0.29f, 0.1f, 1.0f, true, "", "Peak threshold. Lowering it makes detection more sensitive");
+    v2d->addFormWidget("sceneThreshDiff", "Threshold Diff", 0.1f, 0.1f, 1.0f, true, "", "Difference of peak thresholds. Lowering it makes detection more sensitive");
 
-    v2dMenu->makeWindow(8, 16, "Display");
+    v2dMenu->addWindow(8, 16, "Display");
 
-    v2dMenu->makeGroup("Display");
-    v2dMenu->addVariable("Show FPS", show_fps, "Enable or disable the On-screen FPS display");
-    v2dMenu->addVariable("Stetch", stretch, "Stretch the frame buffer to the window size")->set_callback([=](const bool &s) {
+    v2dMenu->addGroup("Display");
+    v2dMenu->addFormWidget("showFPS", "Show FPS", true, "Enable or disable the On-screen FPS display");
+    v2dMenu->addFormWidget("stretch", "Stretch", false, "Stretch the frame buffer to the window size")->set_callback([=](const bool &s) {
         v2d->setStretching(s);
     });
 
 #ifndef __EMSCRIPTEN__
-    v2dMenu->makeButton("Fullscreen", [=]() {
+    v2dMenu->addButton("Fullscreen", [=]() {
         v2d->setFullscreen(!v2d->isFullscreen());
     });
 
-    v2dMenu->makeButton("Offscreen", [=]() {
+    v2dMenu->addButton("Offscreen", [=]() {
         v2d->setOffscreen(!v2d->isOffscreen());
     });
 #endif
@@ -508,8 +383,8 @@ void iteration() {
     static cv::UMat downPrevGrey, downNextGrey, downMotionMaskGrey;
     static vector<cv::Point2f> detectedPoints;
 
-    if(v2d->isAccelerated() != use_acceleration)
-        v2d->setAccelerated(use_acceleration);
+//    if(v2d->isAccelerated() != v2d->value<bool>("hwEnable"))
+//        v2d->setAccelerated(false);
 
 #ifndef __EMSCRIPTEN__
     if(!v2d->capture())
@@ -517,7 +392,7 @@ void iteration() {
 #endif
 
     v2d->clgl([&](cv::UMat& frameBuffer) {
-        cv::resize(frameBuffer, down, cv::Size(v2d->getFrameBufferSize().width * fg_scale, v2d->getFrameBufferSize().height * fg_scale));
+        cv::resize(frameBuffer, down, cv::Size(v2d->getFrameBufferSize().width * v2d->value<float>("fgScale"), v2d->getFrameBufferSize().height * v2d->value<float>("fgScale")));
         frameBuffer.copyTo(background);
     });
 
@@ -533,10 +408,11 @@ void iteration() {
         v2d->clear();
         if (!downPrevGrey.empty()) {
             //We don't want the algorithm to get out of hand when there is a scene change, so we suppress it when we detect one.
-            if (!detect_scene_change(downMotionMaskGrey, scene_change_thresh, scene_change_thresh_diff)) {
+            if (!detect_scene_change(downMotionMaskGrey, v2d->value<float>("sceneThresh"), v2d->value<float>("sceneThreshDiff"))) {
                 //Visualize the sparse optical flow using nanovg
-                cv::Scalar color = cv::Scalar(effect_color.b() * 255.0f, effect_color.g() * 255.0f, effect_color.r() * 255.0f, alpha * 255.0f);
-                visualize_sparse_optical_flow(downPrevGrey, downNextGrey, detectedPoints, fg_scale, max_stroke, color, max_points, point_loss);
+                nanogui::Color& c = v2d->value<nanogui::Color>("color");
+                cv::Scalar color = cv::Scalar(c.b() * 255.0f, c.g() * 255.0f, c.r() * 255.0f, v2d->value<float>("alpha") * 255.0f);
+                visualize_sparse_optical_flow(downPrevGrey, downNextGrey, detectedPoints, v2d->value<float>("fgScale"), v2d->value<int>("maxStroke"), color, v2d->value<int>("maxPoints"), v2d->value<float>("pointLoss"));
             }
         }
     });
@@ -545,13 +421,13 @@ void iteration() {
 
     v2d->clgl([&](cv::UMat& frameBuffer){
         //Put it all together (OpenCL)
-        composite_layers(background, foreground, frameBuffer, frameBuffer, kernel_size, fg_loss, background_mode, post_proc_mode);
+        composite_layers(background, foreground, frameBuffer, frameBuffer, v2d->value<int>("ksize"), v2d->value<float>("fgLoss"), v2d->value<BackgroundModes>("bgMode"), v2d->value<PostProcModes>("ppMode"));
 #ifndef __EMSCRIPTEN__
         cvtColor(frameBuffer, menuFrame, cv::COLOR_BGRA2RGB);
 #endif
     });
 
-    update_fps(v2d, show_fps);
+//    update_fps(v2d, v2dMenu->value<bool>("showFPS"));
 
 #ifndef __EMSCRIPTEN__
     v2d->write();
@@ -655,7 +531,7 @@ int main(int argc, char **argv) {
     float height = capture.get(cv::CAP_PROP_FRAME_HEIGHT);
 
     v2d->makeVAWriter(OUTPUT_FILENAME, cv::VideoWriter::fourcc('V', 'P', '9', '0'), fps, cv::Size(width, height), VA_HW_DEVICE_INDEX);
-    while (true) {
+    while (!done) {
         iteration();
     }
 #else
