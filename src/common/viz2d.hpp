@@ -174,8 +174,25 @@ private:
             );
             return result;
         }
+        template <typename T, typename std::enable_if<std::is_enum<T>::value >::type* = nullptr>
+        void propagate(const string& name, const T& newVal, double scale = 1) {
+            cerr << "enum" << endl;
+            Property& prop = property(name);
+            std::any& val = prop.value_;
+            std::any& min = prop.min_;
+            std::any& max = prop.max_;
+            int& propVal = std::any_cast<int&>(val);
+            int& propMin = std::any_cast<int&>(min);
+            int& propMax = std::any_cast<int&>(max);
 
-        template <typename T> void propagate(const string& name, const T& newVal, double scale = 1) {
+            propVal = propMin + (propVal / scale) * (propMax - propMin);
+
+            T& enumVal = *reinterpret_cast<T*>(&propVal);
+            prop.propagate<T>(enumVal);
+        }
+
+        template <typename T, typename std::enable_if<!std::is_enum<T>::value >::type* = nullptr>
+        void propagate(const string& name, const T& newVal, double scale = 1) {
             Property& prop = property(name);
             std::any& val = prop.value_;
             std::any& min = prop.min_;
@@ -235,6 +252,10 @@ private:
                 auto maxVal = std::any_cast<long double>(max);
                 *x = minVal + ((newVal / scale) * (maxVal - minVal));
                 prop.propagate<long double>(*x);
+            } else if (auto x = std::any_cast<nanogui::Color>(&val)) {
+                cv::Scalar rgb = color_convert(cv::Scalar((newVal / scale) * 255, 127, 127, 255), cv::COLOR_HLS2RGB);
+                nanogui::Color color(rgb[0], rgb[1], rgb[2], 255);
+                prop.propagate<nanogui::Color>(color);
             }
         }
     };
@@ -335,13 +356,13 @@ public:
         return var;
     }
 
-    template<typename Tenum> nanogui::detail::FormWidget<Tenum>* addFormWidget(const string &name, const string &label, const Tenum& e, const std::vector<string> &items) {
-        auto& prop = properties_.create(name, label, (int)e);
+    template<typename Tenum> nanogui::detail::FormWidget<Tenum>* addFormWidget(const string &name, const string &label, const Tenum& e, const Tenum& emin, const Tenum& emax, const std::vector<string> &items) {
+        auto& prop = properties_.create(name, label, (int)e, (int)emin, (int)emax);
         int& v = std::any_cast<int&>(prop.value_);
         Tenum& en = *reinterpret_cast<Tenum*>(&v);
         auto *widget = addComboBox(label, en, items);
         prop.fn_ = [=](const std::any& val) {
-            widget->set_value(en);
+            widget->set_value((Tenum)std::any_cast<int>(val));
         };
         return widget;
     }
@@ -377,7 +398,7 @@ public:
 
     template <typename T>
     void propagate(const string& name, const T& value, double scale = 1) {
-        properties_.propagate<T>(name, value);
+        properties_.propagate<T>(name, value, scale);
     }
 
     template<typename T, typename std::enable_if<std::is_enum<T>::value >::type* = nullptr> T& property(const string& name) {

@@ -93,9 +93,9 @@ EMSCRIPTEN_BINDINGS(my_module)
 void postEvents(const std::vector<MidiEvent> &events) {
     std::vector<std::string> names = v2d->names();
     for(const auto& ev: events) {
-        if(ev.controller_ < names.size()) {
-            cerr << names[ev.controller_] << ev.value_ << 127.0 << endl;
-            v2d->propagate(names[ev.controller_], ev.value_, 127.0);
+        if(ev.controller_ - 12 < names.size()) {
+            cerr << names[ev.controller_ - 12] << ":" << ev.value_ << endl;
+            v2d->propagate(names[ev.controller_ - 12], ev.value_, 127.0);
         }
     }
 }
@@ -295,7 +295,7 @@ void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d) {
     v2d->addFormWidget("fgLoss", "Loss", 2.5f, 0.1f, 99.9f, true, "%", "On every frame the foreground loses on brightness");
 
     v2d->addGroup("Background");
-    v2d->addFormWidget("bgMode", "Mode", GREY, {"Grey", "Color", "Value", "Black"});
+    v2d->addFormWidget("bgMode", "Mode", GREY, GREY, BLACK, {"Grey", "Color", "Value", "Black"});
 
     v2d->addGroup("Points");
     v2d->addFormWidget("maxPoints", "Max. Points", 250000, 10, 1000000, true, "", "The theoretical maximum number of points to track which is scaled by the density of detected points and therefor is usually much smaller");
@@ -307,7 +307,7 @@ void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d) {
     v2d->addFormWidget("alpha", "Alpha", 0.1f, 0.0f, 1.0f, true, "", "The opacity of the effect");
 
     v2d->addWindow(220, 30, "Post Processing");
-    auto* postPocMode = v2d->addFormWidget("ppMode", "Mode",GLOW, {"Glow", "Bloom", "None"});
+    auto* postPocMode = v2d->addFormWidget("ppMode", "Mode",GLOW, GLOW, NONE, {"Glow", "Bloom", "None"});
     auto* kernelSize = v2d->addFormWidget("ksize", "Kernel Size", std::max(int(DIAG / 100 % 2 == 0 ? DIAG / 100 + 1 : DIAG / 100), 1), 1, 63, true, "", "Intensity of glow defined by kernel size");
     kernelSize->set_callback([=](const int& k) {
         static int lastKernelSize = v2d->property<int>("ksize");
@@ -472,7 +472,7 @@ static void finish(int ignore) {
 }
 
 void startMidi(int port) {
-    std::thread midiThread([&]() {
+    std::thread midiThread([=]() {
         MidiReceiver midi(port);
         long long cnt = 0;
         auto epoch = std::chrono::system_clock::now().time_since_epoch();
@@ -518,7 +518,7 @@ int main(int argc, char **argv) {
 
     print_system_info();
 
-//    startMidi(atoi(argv[2]));
+    startMidi(atoi(argv[2]));
 
     if(!v2d->isOffscreen()) {
         setup_gui(v2d);
