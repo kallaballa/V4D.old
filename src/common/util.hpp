@@ -12,7 +12,7 @@ class Viz2D;
 std::string get_gl_info();
 std::string get_cl_info();
 void print_system_info();
-void update_fps(cv::Ptr<Viz2D> viz2d, bool graphical);
+void update_fps(Viz2D& viz2d, bool graphical);
 }
 }
 

@@ -40,11 +40,10 @@ void print_system_info() {
     cerr << "OpenCL Platforms: " << get_cl_info() << endl;
 }
 
-void update_fps(cv::Ptr<kb::viz2d::Viz2D> v2d, bool graphically) {
-    static uint64_t cnt = 0;
-    static cv::TickMeter tick;
-    static float fps;
-
+void update_fps(kb::viz2d::Viz2D& v2d, bool graphically) {
+    auto& cnt = v2d.local<uint64_t>("cnt");
+    auto& tick = v2d.local<cv::TickMeter>("tick");
+    auto& fps = v2d.local<float>("fps");
     if (cnt > 0) {
         tick.stop();
 
@@ -60,19 +59,19 @@ void update_fps(cv::Ptr<kb::viz2d::Viz2D> v2d, bool graphically) {
         }
 
         if (graphically) {
-            v2d->nvg([&](kb::viz2d::Viz2D& v2d, const cv::Size &size) {
-                using namespace kb;
-                string text = "FPS: " + std::to_string(fps);
-                nvg::beginPath();
-                nvg::roundedRect(5, 5, 15 * text.size() + 5, 30, 5);
-                nvg::fillColor(cv::Scalar(255, 255, 255, 180));
-                nvg::fill();
+            v2d.nvg([&](kb::viz2d::Viz2D& v2d, const cv::Size &size) {
+                using namespace kb::viz2d::nvg;
+                string txt = "FPS: " + std::to_string(fps);
+                beginPath();
+                roundedRect(5, 5, 15 * txt.size() + 5, 30, 5);
+                fillColor(cv::Scalar(255, 255, 255, 180));
+                fill();
 
-                nvg::fontSize(30.0f);
-                nvg::fontFace("mono");
-                nvg::fillColor(cv::Scalar(90, 90, 90, 255));
-                nvg::textAlign(NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
-                nvg::text(10, 20, text.c_str(), nullptr);
+                fontSize(30.0f);
+                fontFace("mono");
+                fillColor(cv::Scalar(90, 90, 90, 255));
+                textAlign(NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
+                text(10, 20, txt.c_str(), nullptr);
             });
         }
     }

@@ -100,18 +100,24 @@ void postEvents(const std::vector<MidiEvent> &events) {
     }
 }
 
-void prepare_motion_mask(const cv::UMat& srcGrey, cv::UMat& motionMaskGrey) {
-    static cv::Ptr<cv::BackgroundSubtractor> bg_subtrator = cv::createBackgroundSubtractorMOG2(100, 16.0, false);
-    static int morph_size = 1;
-    static cv::Mat element = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(2 * morph_size + 1, 2 * morph_size + 1), cv::Point(morph_size, morph_size));
+void prepare_motion_mask(kb::viz2d::Viz2D& v2d, const cv::UMat& srcGrey, cv::UMat& motionMaskGrey) {
+    auto& bgSubtractor = v2d.local<cv::Ptr<cv::BackgroundSubtractor>>("bgSubtractor");
+    if(bgSubtractor.empty())
+        bgSubtractor = cv::createBackgroundSubtractorMOG2(100, 16.0, false);
 
-    bg_subtrator->apply(srcGrey, motionMaskGrey);
+    auto& element = v2d.local<cv::Mat>("element");
+    if(element.empty())
+        element = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(2 * 1 + 1, 2 * 1 + 1), cv::Point(1, 1));
+
+    bgSubtractor->apply(srcGrey, motionMaskGrey);
     cv::morphologyEx(motionMaskGrey, motionMaskGrey, cv::MORPH_OPEN, element, cv::Point(element.cols >> 1, element.rows >> 1), 2, cv::BORDER_CONSTANT, cv::morphologyDefaultBorderValue());
 }
 
-void detect_points(const cv::UMat& srcMotionMaskGrey, vector<cv::Point2f>& points) {
-    static cv::Ptr<cv::FastFeatureDetector> detector = cv::FastFeatureDetector::create(1, false);
-    static vector<cv::KeyPoint> tmpKeyPoints;
+void detect_points(kb::viz2d::Viz2D& v2d, const cv::UMat& srcMotionMaskGrey, vector<cv::Point2f>& points) {
+    auto& detector = v2d.local<cv::Ptr<cv::FastFeatureDetector>>("detector");
+    if(detector.empty())
+        detector = cv::FastFeatureDetector::create(1, false);
+    auto& tmpKeyPoints = v2d.local<vector<cv::KeyPoint>>("tmpKeyPoints");
 
     tmpKeyPoints.clear();
     detector->detect(srcMotionMaskGrey, tmpKeyPoints);
@@ -122,27 +128,33 @@ void detect_points(const cv::UMat& srcMotionMaskGrey, vector<cv::Point2f>& point
     }
 }
 
-bool detect_scene_change(const cv::UMat& srcMotionMaskGrey, const float& thresh, const float& theshDiff) {
-    static float last_movement = 0;
+bool detect_scene_change(kb::viz2d::Viz2D& v2d, const cv::UMat& srcMotionMaskGrey, const float& thresh, const float& theshDiff) {
+    auto& lastMovement = v2d.local<float>("lastMovement");
 
     float movement = cv::countNonZero(srcMotionMaskGrey) / double(srcMotionMaskGrey.cols * srcMotionMaskGrey.rows);
-    float relation = movement > 0 && last_movement > 0 ? std::max(movement, last_movement) / std::min(movement, last_movement) : 0;
+    float relation = movement > 0 && lastMovement > 0 ? std::max(movement, lastMovement) / std::min(movement, lastMovement) : 0;
     float relM = relation * log10(1.0f + (movement * 9.0));
-    float relLM = relation * log10(1.0f + (last_movement * 9.0));
+    float relLM = relation * log10(1.0f + (lastMovement * 9.0));
 
-    bool result = !((movement > 0 && last_movement > 0 && relation > 0)
+    bool result = !((movement > 0 && lastMovement > 0 && relation > 0)
             && (relM < thresh && relLM < thresh && fabs(relM - relLM) < theshDiff));
-    last_movement = (last_movement + movement) / 2.0f;
+    lastMovement = (lastMovement + movement) / 2.0f;
     return result;
 }
 
-void visualize_sparse_optical_flow(const cv::UMat &prevGrey, const cv::UMat &nextGrey, vector<cv::Point2f> &detectedPoints, const float scaleFactor, const int maxStrokeSize, const cv::Scalar color, const int maxPoints, const float pointLossPercent) {
-    static vector<cv::Point2f> hull, prevPoints, nextPoints, newPoints;
-    static vector<cv::Point2f> upPrevPoints, upNextPoints;
-    static std::vector<uchar> status;
-    static std::vector<float> err;
-    static std::random_device rd;
-    static std::mt19937 g(rd());
+void visualize_sparse_optical_flow(kb::viz2d::Viz2D& v2d, const cv::UMat &prevGrey, const cv::UMat &nextGrey, const vector<cv::Point2f> &detectedPoints, const float scaleFactor, const int maxStrokeSize, const cv::Scalar color, const int maxPoints, const float pointLossPercent) {
+    auto& hull = v2d.local<vector<cv::Point2f>>("hull");
+    auto& prevPoints = v2d.local<vector<cv::Point2f>>("prevPoints");
+    auto& nextPoints = v2d.local<vector<cv::Point2f>>("nextPoints");
+    auto& newPoints = v2d.local<vector<cv::Point2f>>("newPoints");
+    auto& upPrevPoints = v2d.local<vector<cv::Point2f>>("upPrevPoints");
+    auto& upNextPoints = v2d.local<vector<cv::Point2f>>("upNextPoints");
+    auto& status = v2d.local<vector<uchar>>("status");
+    auto& err = v2d.local<vector<float>>("err");
+    auto& rd = v2d.local<std::random_device>("rd");
+    auto& g = v2d.local<cv::Ptr<std::mt19937>>("g");
+    if(g.empty())
+        g = new std::mt19937(rd());
 
     if (detectedPoints.size() > 4) {
         cv::convexHull(detectedPoints, hull);
@@ -152,7 +164,7 @@ void visualize_sparse_optical_flow(const cv::UMat &prevGrey, const cv::UMat &nex
             float strokeSize = maxStrokeSize * pow(area / (nextGrey.cols * nextGrey.rows), 0.33f);
             size_t currentMaxPoints = ceil(density * maxPoints);
 
-            std::shuffle(prevPoints.begin(), prevPoints.end(), g);
+            std::shuffle(prevPoints.begin(), prevPoints.end(), *g);
             prevPoints.resize(ceil(prevPoints.size() * (1.0f - (pointLossPercent / 100.0f))));
 
             size_t copyn = std::min(detectedPoints.size(), (size_t(std::ceil(currentMaxPoints)) - prevPoints.size()));
@@ -195,13 +207,13 @@ void visualize_sparse_optical_flow(const cv::UMat &prevGrey, const cv::UMat &nex
     }
 }
 
-void bloom(const cv::UMat& src, cv::UMat &dst, int ksize = 3, int threshValue = 235, float gain = 4) {
-    static cv::UMat bgr;
-    static cv::UMat hls;
-    static cv::UMat ls16;
-    static cv::UMat ls;
-    static cv::UMat blur;
-    static std::vector<cv::UMat> hlsChannels;
+void bloom(kb::viz2d::Viz2D& v2d, const cv::UMat& src, cv::UMat &dst, int ksize = 3, int threshValue = 235, float gain = 4) {
+    cv::UMat& bgr = v2d.local("bgr");
+    cv::UMat& hls = v2d.local("hls");
+    cv::UMat& ls16 = v2d.local("ls16");
+    cv::UMat& ls = v2d.local("ls");
+    cv::UMat& blur = v2d.local("blur");
+    std::vector<cv::UMat>& hlsChannels = v2d.local<std::vector<cv::UMat>>("hlsChannels");
 
     cv::cvtColor(src, bgr, cv::COLOR_BGRA2RGB);
     cv::cvtColor(bgr, hls, cv::COLOR_BGR2HLS);
@@ -218,10 +230,10 @@ void bloom(const cv::UMat& src, cv::UMat &dst, int ksize = 3, int threshValue = 
     addWeighted(src, 1.0, blur, gain, 0, dst);
 }
 
-void glow_effect(const cv::UMat &src, cv::UMat &dst, const int ksize) {
-    static cv::UMat resize;
-    static cv::UMat blur;
-    static cv::UMat dst16;
+void glow_effect(kb::viz2d::Viz2D& v2d, const cv::UMat &src, cv::UMat &dst, const int ksize) {
+    cv::UMat& resize = v2d.local("resize");
+    cv::UMat& blur = v2d.local("blur");
+    cv::UMat& dst16 = v2d.local("dst16");
 
     cv::bitwise_not(src, dst);
 
@@ -240,11 +252,12 @@ void glow_effect(const cv::UMat &src, cv::UMat &dst, const int ksize) {
     cv::bitwise_not(dst, dst);
 }
 
-void composite_layers(cv::UMat& background, const cv::UMat& foreground, const cv::UMat& frameBuffer, cv::UMat& dst, int kernelSize, float fgLossPercent, BackgroundModes bgMode, PostProcModes ppMode, int bloomThresh, float bloomGain) {
-    static cv::UMat tmp;
-    static cv::UMat post;
-    static cv::UMat backgroundGrey;
-    static vector<cv::UMat> channels;
+void composite_layers(kb::viz2d::Viz2D& v2d, const cv::UMat& background, const cv::UMat& foreground, const cv::UMat& frameBuffer, cv::UMat& dst, int kernelSize, float fgLossPercent, BackgroundModes bgMode, PostProcModes ppMode, int bloomThresh, float bloomGain) {
+    cv::UMat& backgroundGrey = v2d.local("backgroundGrey");
+    cv::UMat& newBackground = v2d.allocLocal("newBackground", background.size(), background.type(), cv::Scalar::all(0));
+    cv::UMat& tmp = v2d.local("tmp");
+    cv::UMat& post = v2d.local("post");
+    vector<cv::UMat>& channels = v2d.local<vector<cv::UMat>>("hsvChannels");
 
     cv::subtract(foreground, cv::Scalar::all(255.0f * (fgLossPercent / 100.0f)), foreground);
     cv::add(foreground, frameBuffer, foreground);
@@ -252,19 +265,19 @@ void composite_layers(cv::UMat& background, const cv::UMat& foreground, const cv
     switch (bgMode) {
     case GREY:
         cv::cvtColor(background, backgroundGrey, cv::COLOR_BGRA2GRAY);
-        cv::cvtColor(backgroundGrey, background, cv::COLOR_GRAY2BGRA);
+        cv::cvtColor(backgroundGrey, newBackground, cv::COLOR_GRAY2BGRA);
         break;
     case VALUE:
         cv::cvtColor(background, tmp, cv::COLOR_BGRA2BGR);
         cv::cvtColor(tmp, tmp, cv::COLOR_BGR2HSV);
         split(tmp, channels);
-        cv::cvtColor(channels[2], background, cv::COLOR_GRAY2BGRA);
+        cv::cvtColor(channels[2], newBackground, cv::COLOR_GRAY2BGRA);
         break;
     case COLOR:
-        cv::cvtColor(background, background, cv::COLOR_BGRA2RGBA);
+        cv::cvtColor(background, newBackground, cv::COLOR_BGRA2RGBA);
         break;
     case BLACK:
-        background = cv::Scalar::all(0);
+        newBackground = cv::Scalar::all(0);
         break;
     default:
         break;
@@ -272,10 +285,10 @@ void composite_layers(cv::UMat& background, const cv::UMat& foreground, const cv
 
     switch (ppMode) {
     case GLOW:
-        glow_effect(foreground, post, kernelSize);
+        glow_effect(v2d, foreground, post, kernelSize);
         break;
     case BLOOM:
-        bloom(foreground, post, kernelSize, bloomThresh, bloomGain);
+        bloom(v2d, foreground, post, kernelSize, bloomThresh, bloomGain);
         break;
     case NONE:
         foreground.copyTo(post);
@@ -284,7 +297,7 @@ void composite_layers(cv::UMat& background, const cv::UMat& foreground, const cv
         break;
     }
 
-    cv::add(background, post, dst);
+    cv::add(newBackground, post, dst);
 }
 
 void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d) {
@@ -382,8 +395,8 @@ void iteration() {
         exit(0);
 #endif
     v2d->clgl([](Viz2D& v2d, cv::UMat& frameBuffer) {
-        cv::UMat& down = v2d.buffer("down");
-        cv::UMat& background = v2d.buffer("background");
+        cv::UMat& down = v2d.output("down");
+        cv::UMat& background = v2d.output("background");
 
         const float& fgScale = v2d.property<float>("fgScale");
 
@@ -392,25 +405,25 @@ void iteration() {
     });
 
     v2d->cl([](Viz2D& v2d) {
-        cv::UMat& down = v2d.buffer("down");
-        cv::UMat& downNextGrey = v2d.buffer("downNextGrey");
-        cv::UMat& downMotionMaskGrey = v2d.buffer("downMotionMaskGrey");
+        const cv::UMat& down = v2d.input("down");
+        cv::UMat& downNextGrey = v2d.output("downNextGrey");
+        cv::UMat& downMotionMaskGrey = v2d.output("downMotionMaskGrey");
 
-        auto& detectedPoints = v2d.variable<vector<cv::Point2f>>("detectedPoints");
+        auto& detectedPoints = v2d.output<vector<cv::Point2f>>("detectedPoints");
 
         cv::cvtColor(down, downNextGrey, cv::COLOR_RGBA2GRAY);
         //Subtract the background to create a motion mask
-        prepare_motion_mask(downNextGrey, downMotionMaskGrey);
+        prepare_motion_mask(v2d, downNextGrey, downMotionMaskGrey);
         //Detect trackable points in the motion mask
-        detect_points(downMotionMaskGrey, detectedPoints);
+        detect_points(v2d, downMotionMaskGrey, detectedPoints);
     });
 
     v2d->nvg([](Viz2D& v2d, const cv::Size& sz) {
-        cv::UMat& downMotionMaskGrey = v2d.buffer("downMotionMaskGrey");
-        cv::UMat& downPrevGrey = v2d.buffer("downPrevGrey");
-        cv::UMat& downNextGrey = v2d.buffer("downNextGrey");
+        const cv::UMat& downMotionMaskGrey = v2d.input("downMotionMaskGrey");
+        const cv::UMat& downPrevGrey = v2d.input("downPrevGrey");
+        const cv::UMat& downNextGrey = v2d.input("downNextGrey");
 
-        auto& detectedPoints = v2d.variable<vector<cv::Point2f>>("detectedPoints");
+        const auto& detectedPoints = v2d.input<vector<cv::Point2f>>("detectedPoints");
 
         const float& sceneThresh = v2d.property<float>("sceneThresh");
         const float& sceneThreshDiff = v2d.property<float>("sceneThreshDiff");
@@ -424,22 +437,21 @@ void iteration() {
         nvg::clear();
         if (!downPrevGrey.empty()) {
             //We don't want the algorithm to get out of hand when there is a scene change, so we suppress it when we detect one.
-            if (!detect_scene_change(downMotionMaskGrey, sceneThresh, sceneThreshDiff)) {
+            if (!detect_scene_change(v2d, downMotionMaskGrey, sceneThresh, sceneThreshDiff)) {
                 //Visualize the sparse optical flow using nanovg
                 cv::Scalar color = cv::Scalar(c.b() * 255.0f, c.g() * 255.0f, c.r() * 255.0f, alpha * 255.0f);
-                visualize_sparse_optical_flow(downPrevGrey, downNextGrey, detectedPoints, fgScale, maxStroke, color, maxPoints, pointLoss);
+                visualize_sparse_optical_flow(v2d, downPrevGrey, downNextGrey, detectedPoints, fgScale, maxStroke, color, maxPoints, pointLoss);
             }
         }
     });
 
     v2d->cl([](Viz2D& v2d){
-        v2d.buffer("downPrevGrey") = v2d.buffer("downNextGrey").clone();
+        v2d.output("downPrevGrey") = v2d.input("downNextGrey").clone();
     });
 
     v2d->clgl([](Viz2D& v2d, cv::UMat& frameBuffer){
-        cv::UMat& foreground = v2d.allocate_once("foreground", frameBuffer.size(), frameBuffer.type(), cv::Scalar::all(0));
-        cv::UMat& background = v2d.buffer("background");
-        cv::UMat& menuFrame = v2d.buffer("menuFrame");
+        const cv::UMat& foreground = v2d.allocInput("foreground", frameBuffer.size(), frameBuffer.type(), cv::Scalar::all(0));
+        const cv::UMat& background = v2d.input("background");
 
         const int& ksize = v2d.property<int>("ksize");
         const float& fgLoss = v2d.property<float>("fgLoss");
@@ -449,13 +461,10 @@ void iteration() {
         const PostProcModes& ppMode = v2d.property<PostProcModes>("ppMode");
 
         //Put it all together (OpenCL)
-        composite_layers(background, foreground, frameBuffer, frameBuffer, ksize, fgLoss, bgMode, ppMode, bloomThresh, bloomGain);
-#ifndef __EMSCRIPTEN__
-        cvtColor(frameBuffer, menuFrame, cv::COLOR_BGRA2RGB);
-#endif
+        composite_layers(v2d, background, foreground, frameBuffer, frameBuffer, ksize, fgLoss, bgMode, ppMode, bloomThresh, bloomGain);
     });
 
-    update_fps(v2d, v2d->property<bool>("showFPS"));
+    update_fps(*v2d, v2d->property<bool>("showFPS"));
 
 #ifndef __EMSCRIPTEN__
     v2d->write();
@@ -471,35 +480,13 @@ static void finish(int ignore) {
     done = true;
 }
 
-void startMidi(int port) {
+void start_midi(int port) {
     std::thread midiThread([=]() {
         MidiReceiver midi(port);
-        long long cnt = 0;
-        auto epoch = std::chrono::system_clock::now().time_since_epoch();
-        auto firstFrameTime = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count();
-
         while (!done) {
-            epoch = std::chrono::system_clock::now().time_since_epoch();
-            auto start = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count();
-            {
                 postEvents(midi.receive());
-            }
-
-            epoch = std::chrono::system_clock::now().time_since_epoch();
-            auto dur = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count() - start;
-
-            if (dur < (1000000.0 / FPS))
-                usleep((1000000.0 / FPS) - dur);
-            else
-                std::cerr << "Underrun: " << (dur - (1000000.0 / FPS)) / 1000.0 << std::endl;
-            ++cnt;
+                usleep(10000);
         }
-        epoch = std::chrono::system_clock::now().time_since_epoch();
-        auto lastFrameTime = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count();
-        auto total = lastFrameTime - firstFrameTime;
-        auto perfect = cnt * (1000000.0 / FPS);
-
-        std::cerr << "skew: " << (double) perfect / total << std::endl;
     });
     midiThread.detach();
 }
@@ -518,12 +505,12 @@ int main(int argc, char **argv) {
 
     print_system_info();
 
-    startMidi(atoi(argv[2]));
-
     if(!v2d->isOffscreen()) {
         setup_gui(v2d);
         v2d->setVisible(true);
     }
+
+    start_midi(atoi(argv[2]));
 
 #ifndef __EMSCRIPTEN__
     auto capture = v2d->makeVACapture(argv[1], VA_HW_DEVICE_INDEX);

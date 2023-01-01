@@ -9,6 +9,7 @@
 #include <iostream>
 #include <set>
 #include <string>
+#include <source_location>
 #include <opencv2/opencv.hpp>
 #include <opencv2/videoio.hpp>
 #include <nanogui/nanogui.h>
@@ -42,37 +43,71 @@ void gl_check_error(const std::filesystem::path &file, unsigned int line, const 
 void error_callback(int error, const char *description);
 
 class BufferStore {
-    std::map<std::thread::id, std::map<string, cv::UMat>> bufMap_;
-    std::map<std::thread::id, std::map<string, void*>> varMap_;
-    std::map<string, cv::UMat>& getBufMap() {
-        return bufMap_[std::this_thread::get_id()];
+    std::map<std::thread::id, std::map<string, cv::UMat>> globalMap_;
+    std::map<std::thread::id, std::map<string, cv::UMat>> localMap_;
+    std::map<std::thread::id, std::map<string, void*>> globalVarMap_;
+    std::map<std::thread::id, std::map<string, void*>> localVarMap_;
+
+    std::map<string, cv::UMat>& getGlobalMap() {
+        return globalMap_[std::this_thread::get_id()];
     }
 
-    std::map<string, void*>& getVarMap() {
-        return varMap_[std::this_thread::get_id()];
+    std::map<string, cv::UMat>& getLocalMap() {
+        return localMap_[std::this_thread::get_id()];
     }
 
+    std::map<string, void*>& getGlobalVarMap() {
+        return globalVarMap_[std::this_thread::get_id()];
+    }
+
+    std::map<string, void*>& getLocalVarMap() {
+        return localVarMap_[std::this_thread::get_id()];
+    }
 public:
-    cv::UMat& allocate_once(const string& name, const cv::Size& sz, int type, const cv::Scalar& defaultValue, cv::UMatUsageFlags usageFlags = cv::USAGE_DEFAULT) {
-        auto& buf = getBufMap()[name];
+    cv::UMat& allocateGlobal(const string& name, const cv::Size& sz, int type, const cv::Scalar& defaultValue, cv::UMatUsageFlags usageFlags = cv::USAGE_DEFAULT) {
+        auto& buf = getGlobalMap()[name];
         if(buf.empty())
             buf.create(sz, type, usageFlags);
 
         return buf;
     }
 
-    cv::UMat& buffer(const string& name) {
-        std::stringstream ss;
-        return getBufMap()[name];
+    cv::UMat& allocateLocal(const string& name, const cv::Size& sz, int type, const cv::Scalar& defaultValue, cv::UMatUsageFlags usageFlags = cv::USAGE_DEFAULT) {
+        auto& buf = getGlobalMap()[name];
+        if(buf.empty())
+            buf.create(sz, type, usageFlags);
+
+        return buf;
     }
 
-    template <typename T> T& variable(const string& name) {
-        auto it = getVarMap().find(name);
-        if(it != getVarMap().end()) {
+    cv::UMat& global(const string& name) {
+        return getGlobalMap()[name];
+    }
+
+    cv::UMat& local(const string& name) {
+        return getLocalMap()[name];
+    }
+
+    template <typename T> T& global(const string& name) {
+        auto& map = getGlobalVarMap();
+        auto it = map.find(name);
+        if(it != map.end()) {
             return *static_cast<T*>((*it).second);
         } else {
             auto* p = new T();
-            getVarMap()[name] = p;
+            map[name] = p;
+            return *p;
+        }
+    }
+
+    template <typename T> T& local(const string& name) {
+        auto& map = getLocalVarMap();
+        auto it = map.find(name);
+        if(it != map.end()) {
+            return *static_cast<T*>((*it).second);
+        } else {
+            auto* p = new T();
+            map[name] = p;
             return *p;
         }
     }
@@ -410,16 +445,58 @@ public:
         return std::any_cast<T&>(properties_.property(name).value_);
     }
 
-    cv::UMat& allocate_once(const string& name, const cv::Size& sz, int type, const cv::Scalar& defaultValue, cv::UMatUsageFlags usageFlags = cv::USAGE_DEFAULT) {
-        return store.allocate_once(name, sz, type, defaultValue, usageFlags);
+    cv::UMat& allocOutput(const string& name, const cv::Size& sz, int type, const cv::Scalar& defaultValue, cv::UMatUsageFlags usageFlags = cv::USAGE_DEFAULT) {
+        return store.allocateGlobal(name, sz, type, defaultValue, usageFlags);
     }
 
-    cv::UMat& buffer(const string& name) {
-        return store.buffer(name);
+    const cv::UMat& allocInput(const string& name, const cv::Size& sz, int type, const cv::Scalar& defaultValue, cv::UMatUsageFlags usageFlags = cv::USAGE_DEFAULT) {
+        return store.allocateGlobal(name, sz, type, defaultValue, usageFlags);
     }
 
-    template <typename T> T& variable(const string& name) {
-        return store.variable<T>(name);
+    cv::UMat& allocLocal(const string& name, const cv::Size& sz, int type, const cv::Scalar& defaultValue, cv::UMatUsageFlags usageFlags = cv::USAGE_DEFAULT, const std::source_location& loc = std::source_location::current()) {
+        std::ostringstream ss;
+        ss << loc.file_name() << "("
+                << loc.line() << ":"
+                << loc.column() << ") `"
+                << loc.function_name() << "`: "
+                << name;
+        return store.allocateLocal(ss.str(), sz, type, defaultValue, usageFlags);
+    }
+
+    cv::UMat& output(const string& name) {
+        return store.global(name);
+    }
+
+    const cv::UMat& input(const string& name) {
+        return store.global(name);
+    }
+
+    cv::UMat& local(const string& name, const std::source_location& loc = std::source_location::current()) {
+        std::ostringstream ss;
+        ss << loc.file_name() << "("
+                << loc.line() << ":"
+                << loc.column() << ") `"
+                << loc.function_name() << "`: "
+                << name;
+        return store.local(ss.str());
+    }
+
+    template <typename T> T& output(const string& name) {
+        return store.global<T>(name);
+    }
+
+    template <typename T> const T& input(const string& name) {
+        return store.global<T>(name);
+    }
+
+    template <typename T> T& local(const string& name, const std::source_location& loc = std::source_location::current()) {
+        std::ostringstream ss;
+        ss << loc.file_name() << "("
+                << loc.line() << ":"
+                << loc.column() << ") `"
+                << loc.function_name() << "`: "
+                << name;
+        return store.local<T>(ss.str());
     }
 private:
     nanogui::detail::FormWidget<bool>* addVariable(const string &name, bool &v, const string &tooltip = "", bool visible = true, bool enabled = true);
