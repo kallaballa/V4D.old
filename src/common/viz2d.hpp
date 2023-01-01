@@ -28,6 +28,10 @@ using std::string;
 
 namespace kb {
 namespace viz2d {
+class NVG;
+class Viz2D;
+cv::Scalar color_convert(const cv::Scalar& src, cv::ColorConversionCodes code);
+
 namespace detail {
 class CLGLContext;
 class CLVAContext;
@@ -42,7 +46,7 @@ void gl_check_error(const std::filesystem::path &file, unsigned int line, const 
 
 void error_callback(int error, const char *description);
 
-class BufferStore {
+class MemoryPool {
     std::map<std::thread::id, std::map<string, cv::UMat>> globalMap_;
     std::map<std::thread::id, std::map<string, cv::UMat>> localMap_;
     std::map<std::thread::id, std::map<string, void*>> globalVarMap_;
@@ -112,9 +116,162 @@ public:
         }
     }
 };
-}
 
-cv::Scalar color_convert(const cv::Scalar& src, cv::ColorConversionCodes code);
+
+class Property {
+    friend class kb::viz2d::Viz2D;
+public:
+    string name_;
+    string label_;
+    std::any value_;
+    std::any min_;
+    std::any max_;
+
+    Property(const string &name, const string &label, const std::any &value, const std::any &min, const std::any &max) :
+    name_(name), label_(label), value_(value), min_(min), max_(max){
+    }
+
+    template<typename T>
+    void propagate(const T& v) {
+        value_ = v;
+        assert(fn_);
+        fn_(std::any(v));
+    }
+protected:
+    std::function<void(std::any)> fn_;
+};
+
+class Properties {
+    std::map<std::string, std::any> propMap_;
+public:
+    Properties() {
+    }
+
+    template<typename Tval> Property& create(const string &name, const string &label, const Tval& value, const Tval &min, const Tval &max) {
+        propMap_[name] = Property(name, label, value, min, max);
+        return property(name);
+    }
+
+    template<typename Tenum> Property& create(const string &name, const string &label, const Tenum& e) {
+        propMap_[name] = Property(name, label, e, e, e);
+        return property(name);
+    }
+
+    Property& create(const string &name, const string &label, const nanogui::Color& color) {
+        propMap_[name] = Property(name, label, color, nanogui::Color(0,0,0,0), nanogui::Color(255,255,255,255));
+        return property(name);
+    }
+
+    Property& create(const string &name, const string &label, const bool& b) {
+        propMap_[name] = Property(name, label, b, false, true);
+        return property(name);
+    }
+
+    template<typename T> Property& create(const string &name, const string &label, T& value, T& min, T& max) {
+        propMap_[name] = Property(name, label, value, min, max);
+        return property(name);
+    }
+
+    Property& property(const string& name) {
+        return std::any_cast<Property&>(propMap_[name]);
+    }
+
+    std::vector<std::string> names() {
+        std::vector<std::string> result;
+        std::transform(
+                propMap_.begin(),
+                propMap_.end(),
+            std::back_inserter(result),
+            [](auto &kv){ return kv.first;}
+        );
+        return result;
+    }
+    template <typename T, typename std::enable_if<std::is_enum<T>::value >::type* = nullptr>
+    void propagate(const string& name, const T& newVal, double scale = 1) {
+        cerr << "enum" << endl;
+        Property& prop = property(name);
+        std::any& val = prop.value_;
+        std::any& min = prop.min_;
+        std::any& max = prop.max_;
+        int& propVal = std::any_cast<int&>(val);
+        int& propMin = std::any_cast<int&>(min);
+        int& propMax = std::any_cast<int&>(max);
+
+        propVal = propMin + (propVal / scale) * (propMax - propMin);
+
+        T& enumVal = *reinterpret_cast<T*>(&propVal);
+        prop.propagate<T>(enumVal);
+    }
+
+    template <typename T, typename std::enable_if<!std::is_enum<T>::value >::type* = nullptr>
+    void propagate(const string& name, const T& newVal, double scale = 1) {
+        Property& prop = property(name);
+        std::any& val = prop.value_;
+        std::any& min = prop.min_;
+        std::any& max = prop.max_;
+        if (auto x = std::any_cast<int8_t>(&val)) {
+            auto minVal = std::any_cast<int8_t>(min);
+            auto maxVal = std::any_cast<int8_t>(max);
+            *x = minVal + ((newVal / scale) * (maxVal - minVal));
+            prop.propagate<int8_t>(*x);
+        } else if (auto x = std::any_cast<uint8_t>(&val)) {
+            auto minVal = std::any_cast<uint8_t>(min);
+            auto maxVal = std::any_cast<uint8_t>(max);
+            *x = minVal + ((newVal / scale) * (maxVal - minVal));
+            prop.propagate<uint8_t>(*x);
+        } else if (auto x = std::any_cast<int16_t>(&val)) {
+            auto minVal = std::any_cast<int16_t>(min);
+            auto maxVal = std::any_cast<int16_t>(max);
+            *x = minVal + ((newVal / scale) * (maxVal - minVal));
+            prop.propagate<int16_t>(*x);
+        } else if (auto x = std::any_cast<uint16_t>(&val)) {
+            auto minVal = std::any_cast<uint16_t>(min);
+            auto maxVal = std::any_cast<uint16_t>(max);
+            *x = minVal + ((newVal / scale) * (maxVal - minVal));
+            prop.propagate<uint16_t>(*x);
+        } else if (auto x = std::any_cast<int32_t>(&val)) {
+            auto minVal = std::any_cast<int32_t>(min);
+            auto maxVal = std::any_cast<int32_t>(max);
+            *x = minVal + ((newVal / scale) * (maxVal - minVal));
+            prop.propagate<int32_t>(*x);
+        } else if (auto x = std::any_cast<uint32_t>(&val)) {
+            auto minVal = std::any_cast<uint32_t>(min);
+            auto maxVal = std::any_cast<uint32_t>(max);
+            *x = minVal + ((newVal / scale) * (maxVal - minVal));
+            prop.propagate<uint32_t>(*x);
+        } else if (auto x = std::any_cast<int64_t>(&val)) {
+            auto minVal = std::any_cast<int64_t>(min);
+            auto maxVal = std::any_cast<int64_t>(max);
+            *x = minVal + ((newVal / scale) * (maxVal - minVal));
+            prop.propagate<int64_t>(*x);
+        } else if (auto x = std::any_cast<uint64_t>(&val)) {
+            auto minVal = std::any_cast<uint64_t>(min);
+            auto maxVal = std::any_cast<uint64_t>(max);
+            *x = minVal + ((newVal / scale) * (maxVal - minVal));
+            prop.propagate<uint64_t>(*x);
+        } else if (auto x = std::any_cast<float>(&val)) {
+            auto minVal = std::any_cast<float>(min);
+            auto maxVal = std::any_cast<float>(max);
+            *x = minVal + ((newVal / scale) * (maxVal - minVal));
+            prop.propagate<float>(*x);
+        } else if (auto x = std::any_cast<double>(&val)) {
+            auto minVal = std::any_cast<double>(min);
+            auto maxVal = std::any_cast<double>(max);
+            *x = minVal + ((newVal / scale) * (maxVal - minVal));
+            prop.propagate<double>(*x);
+        } else if (auto x = std::any_cast<long double>(&val)) {
+            auto minVal = std::any_cast<long double>(min);
+            auto maxVal = std::any_cast<long double>(max);
+            *x = minVal + ((newVal / scale) * (maxVal - minVal));
+            prop.propagate<long double>(*x);
+        } else if (auto x = std::any_cast<nanogui::Color>(&val)) {
+            cv::Scalar rgb = kb::viz2d::color_convert(cv::Scalar((newVal / scale) * 255, 127, 127, 255), cv::COLOR_HLS2RGB);
+            nanogui::Color color(rgb[0], rgb[1], rgb[2], 255);
+            prop.propagate<nanogui::Color>(color);
+        }
+    }
+};
+}
 
 using namespace kb::viz2d::detail;
 
@@ -137,163 +294,10 @@ public:
     bool mouse_drag_event(const nanogui::Vector2i &p, const nanogui::Vector2i &rel, int button, int mods) override;
 };
 
-class NVG;
-class Viz2D;
-class Property {
-    friend class Viz2D;
-public:
-    string name_;
-    string label_;
-    std::any value_;
-    std::any min_;
-    std::any max_;
-
-    Property(const string &name, const string &label, const std::any &value, const std::any &min, const std::any &max) :
-    name_(name), label_(label), value_(value), min_(min), max_(max){
-    }
-
-    template<typename T>
-    void propagate(const T& v) {
-        value_ = v;
-        assert(fn_);
-        fn_(std::any(v));
-    }
-private:
-    std::function<void(std::any)> fn_;
-};
 
 class Viz2D {
+    friend class detail::Property;
 private:
-    class Properties {
-        std::map<std::string, std::any> propMap_;
-    public:
-        Properties() {
-        }
-
-        template<typename Tval> Property& create(const string &name, const string &label, const Tval& value, const Tval &min, const Tval &max) {
-            propMap_[name] = Property(name, label, value, min, max);
-            return property(name);
-        }
-
-        template<typename Tenum> Property& create(const string &name, const string &label, const Tenum& e) {
-            propMap_[name] = Property(name, label, e, e, e);
-            return property(name);
-        }
-
-        Property& create(const string &name, const string &label, const nanogui::Color& color) {
-            propMap_[name] = Property(name, label, color, nanogui::Color(0,0,0,0), nanogui::Color(255,255,255,255));
-            return property(name);
-        }
-
-        Property& create(const string &name, const string &label, const bool& b) {
-            propMap_[name] = Property(name, label, b, false, true);
-            return property(name);
-        }
-
-        template<typename T> Property& create(const string &name, const string &label, T& value, T& min, T& max) {
-            propMap_[name] = Property(name, label, value, min, max);
-            return property(name);
-        }
-
-        Property& property(const string& name) {
-            return std::any_cast<Property&>(propMap_[name]);
-        }
-
-        std::vector<std::string> names() {
-            std::vector<std::string> result;
-            std::transform(
-                    propMap_.begin(),
-                    propMap_.end(),
-                std::back_inserter(result),
-                [](auto &kv){ return kv.first;}
-            );
-            return result;
-        }
-        template <typename T, typename std::enable_if<std::is_enum<T>::value >::type* = nullptr>
-        void propagate(const string& name, const T& newVal, double scale = 1) {
-            cerr << "enum" << endl;
-            Property& prop = property(name);
-            std::any& val = prop.value_;
-            std::any& min = prop.min_;
-            std::any& max = prop.max_;
-            int& propVal = std::any_cast<int&>(val);
-            int& propMin = std::any_cast<int&>(min);
-            int& propMax = std::any_cast<int&>(max);
-
-            propVal = propMin + (propVal / scale) * (propMax - propMin);
-
-            T& enumVal = *reinterpret_cast<T*>(&propVal);
-            prop.propagate<T>(enumVal);
-        }
-
-        template <typename T, typename std::enable_if<!std::is_enum<T>::value >::type* = nullptr>
-        void propagate(const string& name, const T& newVal, double scale = 1) {
-            Property& prop = property(name);
-            std::any& val = prop.value_;
-            std::any& min = prop.min_;
-            std::any& max = prop.max_;
-            if (auto x = std::any_cast<int8_t>(&val)) {
-                auto minVal = std::any_cast<int8_t>(min);
-                auto maxVal = std::any_cast<int8_t>(max);
-                *x = minVal + ((newVal / scale) * (maxVal - minVal));
-                prop.propagate<int8_t>(*x);
-            } else if (auto x = std::any_cast<uint8_t>(&val)) {
-                auto minVal = std::any_cast<uint8_t>(min);
-                auto maxVal = std::any_cast<uint8_t>(max);
-                *x = minVal + ((newVal / scale) * (maxVal - minVal));
-                prop.propagate<uint8_t>(*x);
-            } else if (auto x = std::any_cast<int16_t>(&val)) {
-                auto minVal = std::any_cast<int16_t>(min);
-                auto maxVal = std::any_cast<int16_t>(max);
-                *x = minVal + ((newVal / scale) * (maxVal - minVal));
-                prop.propagate<int16_t>(*x);
-            } else if (auto x = std::any_cast<uint16_t>(&val)) {
-                auto minVal = std::any_cast<uint16_t>(min);
-                auto maxVal = std::any_cast<uint16_t>(max);
-                *x = minVal + ((newVal / scale) * (maxVal - minVal));
-                prop.propagate<uint16_t>(*x);
-            } else if (auto x = std::any_cast<int32_t>(&val)) {
-                auto minVal = std::any_cast<int32_t>(min);
-                auto maxVal = std::any_cast<int32_t>(max);
-                *x = minVal + ((newVal / scale) * (maxVal - minVal));
-                prop.propagate<int32_t>(*x);
-            } else if (auto x = std::any_cast<uint32_t>(&val)) {
-                auto minVal = std::any_cast<uint32_t>(min);
-                auto maxVal = std::any_cast<uint32_t>(max);
-                *x = minVal + ((newVal / scale) * (maxVal - minVal));
-                prop.propagate<uint32_t>(*x);
-            } else if (auto x = std::any_cast<int64_t>(&val)) {
-                auto minVal = std::any_cast<int64_t>(min);
-                auto maxVal = std::any_cast<int64_t>(max);
-                *x = minVal + ((newVal / scale) * (maxVal - minVal));
-                prop.propagate<int64_t>(*x);
-            } else if (auto x = std::any_cast<uint64_t>(&val)) {
-                auto minVal = std::any_cast<uint64_t>(min);
-                auto maxVal = std::any_cast<uint64_t>(max);
-                *x = minVal + ((newVal / scale) * (maxVal - minVal));
-                prop.propagate<uint64_t>(*x);
-            } else if (auto x = std::any_cast<float>(&val)) {
-                auto minVal = std::any_cast<float>(min);
-                auto maxVal = std::any_cast<float>(max);
-                *x = minVal + ((newVal / scale) * (maxVal - minVal));
-                prop.propagate<float>(*x);
-            } else if (auto x = std::any_cast<double>(&val)) {
-                auto minVal = std::any_cast<double>(min);
-                auto maxVal = std::any_cast<double>(max);
-                *x = minVal + ((newVal / scale) * (maxVal - minVal));
-                prop.propagate<double>(*x);
-            } else if (auto x = std::any_cast<long double>(&val)) {
-                auto minVal = std::any_cast<long double>(min);
-                auto maxVal = std::any_cast<long double>(max);
-                *x = minVal + ((newVal / scale) * (maxVal - minVal));
-                prop.propagate<long double>(*x);
-            } else if (auto x = std::any_cast<nanogui::Color>(&val)) {
-                cv::Scalar rgb = color_convert(cv::Scalar((newVal / scale) * 255, 127, 127, 255), cv::COLOR_HLS2RGB);
-                nanogui::Color color(rgb[0], rgb[1], rgb[2], 255);
-                prop.propagate<nanogui::Color>(color);
-            }
-        }
-    };
     friend class NanoVGContext;
     const cv::Size initialSize_;
     cv::Size frameBufferSize_;
@@ -322,8 +326,8 @@ private:
     int vaWriterDeviceIndex_ = 0;
     bool mouseDrag_ = false;
     nanogui::Screen* screen_ = nullptr;
-    Properties properties_;
-    BufferStore store;
+    detail::Properties properties_;
+    detail::MemoryPool memPool;
 public:
     Viz2D(const cv::Size &initialSize, const cv::Size& frameBufferSize, bool offscreen, const string &title, int major = 4, int minor = 6, int samples = 0, bool debug = false);
     virtual ~Viz2D();
@@ -446,11 +450,11 @@ public:
     }
 
     cv::UMat& allocOutput(const string& name, const cv::Size& sz, int type, const cv::Scalar& defaultValue, cv::UMatUsageFlags usageFlags = cv::USAGE_DEFAULT) {
-        return store.allocateGlobal(name, sz, type, defaultValue, usageFlags);
+        return memPool.allocateGlobal(name, sz, type, defaultValue, usageFlags);
     }
 
     const cv::UMat& allocInput(const string& name, const cv::Size& sz, int type, const cv::Scalar& defaultValue, cv::UMatUsageFlags usageFlags = cv::USAGE_DEFAULT) {
-        return store.allocateGlobal(name, sz, type, defaultValue, usageFlags);
+        return memPool.allocateGlobal(name, sz, type, defaultValue, usageFlags);
     }
 
     cv::UMat& allocLocal(const string& name, const cv::Size& sz, int type, const cv::Scalar& defaultValue, cv::UMatUsageFlags usageFlags = cv::USAGE_DEFAULT, const std::source_location& loc = std::source_location::current()) {
@@ -460,15 +464,15 @@ public:
                 << loc.column() << ") `"
                 << loc.function_name() << "`: "
                 << name;
-        return store.allocateLocal(ss.str(), sz, type, defaultValue, usageFlags);
+        return memPool.allocateLocal(ss.str(), sz, type, defaultValue, usageFlags);
     }
 
     cv::UMat& output(const string& name) {
-        return store.global(name);
+        return memPool.global(name);
     }
 
     const cv::UMat& input(const string& name) {
-        return store.global(name);
+        return memPool.global(name);
     }
 
     cv::UMat& local(const string& name, const std::source_location& loc = std::source_location::current()) {
@@ -478,15 +482,15 @@ public:
                 << loc.column() << ") `"
                 << loc.function_name() << "`: "
                 << name;
-        return store.local(ss.str());
+        return memPool.local(ss.str());
     }
 
     template <typename T> T& output(const string& name) {
-        return store.global<T>(name);
+        return memPool.global<T>(name);
     }
 
     template <typename T> const T& input(const string& name) {
-        return store.global<T>(name);
+        return memPool.global<T>(name);
     }
 
     template <typename T> T& local(const string& name, const std::source_location& loc = std::source_location::current()) {
@@ -496,7 +500,7 @@ public:
                 << loc.column() << ") `"
                 << loc.function_name() << "`: "
                 << name;
-        return store.local<T>(ss.str());
+        return memPool.local<T>(ss.str());
     }
 private:
     nanogui::detail::FormWidget<bool>* addVariable(const string &name, bool &v, const string &tooltip = "", bool visible = true, bool enabled = true);

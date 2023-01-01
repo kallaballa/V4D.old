@@ -24,7 +24,7 @@ cv::Size CLVAContext::getVideoFrameSize() {
 
 bool CLVAContext::capture(std::function<void(cv::UMat&)> fn) {
     {
-        if(!context_ .empty()) {
+        if(hasContext()) {
 #ifndef __EMSCRIPTEN__
             CLExecScope_t scope(context_);
 #endif
@@ -66,10 +66,14 @@ void CLVAContext::write(std::function<void(const cv::UMat&)> fn) {
     }
     assert(videoFrame_.size() == videoFrameSize_);
     {
+        if(hasContext()) {
 #ifndef __EMSCRIPTEN__
-        CLExecScope_t scope(context_);
+            CLExecScope_t scope(context_);
 #endif
-        fn(videoFrame_);
+            fn(videoFrame_);
+        } else {
+            fn(videoFrame_);
+        }
     }
 }
 
