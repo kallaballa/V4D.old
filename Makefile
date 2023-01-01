@@ -102,7 +102,7 @@ export EMSDK
 
 dirs: docs
 	${MAKE} -C src/common/ ${MAKEFLAGS} CXX=${CXX} ${MAKECMDGOALS}
-#	${MAKE} -C src/quad/ ${MAKEFLAGS} CXX=${CXX} ${MAKECMDGOALS}
+	${MAKE} -C src/quad/ ${MAKEFLAGS} CXX=${CXX} ${MAKECMDGOALS}
 #ifndef EMSDK
 #	${MAKE} -C src/video/ ${MAKEFLAGS} CXX=${CXX} ${MAKECMDGOALS}
 #	${MAKE} -C src/nanovg/ ${MAKEFLAGS} CXX=${CXX} ${MAKECMDGOALS}

@@ -6,7 +6,7 @@
 constexpr long unsigned int WIDTH = 1920;
 constexpr long unsigned int HEIGHT = 1080;
 constexpr double FPS = 60;
-constexpr bool OFFSCREEN = false;
+constexpr bool OFFSCREEN = true;
 constexpr const char* OUTPUT_FILENAME = "tetra-demo.mkv";
 constexpr const int VA_HW_DEVICE_INDEX = 0;
 const unsigned long DIAG = hypot(double(WIDTH), double(HEIGHT));
@@ -179,10 +179,10 @@ void render_scene(const cv::Size& sz) {
     glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 }
 
-void glow_effect(const cv::UMat &src, cv::UMat &dst, const int ksize) {
-    static cv::UMat resize;
-    static cv::UMat blur;
-    static cv::UMat dst16;
+void glow_effect(kb::viz2d::Viz2D& v2d, const cv::UMat &src, cv::UMat &dst, const int ksize) {
+    cv::UMat& resize = v2d.local("resize");
+    cv::UMat& blur = v2d.local("blur");
+    cv::UMat& dst16 = v2d.local("dst16");
 
     cv::bitwise_not(src, dst);
 
@@ -204,21 +204,23 @@ void glow_effect(const cv::UMat &src, cv::UMat &dst, const int ksize) {
 cv::Ptr<kb::viz2d::Viz2D> v2d = new kb::viz2d::Viz2D(cv::Size(WIDTH, HEIGHT), cv::Size(WIDTH, HEIGHT), OFFSCREEN, "Tetra Demo");
 
 void iteration() {
-    //Reinitialize the scene on every frame because nvg interfers
-    v2d->gl(init_scene);
+    using kb::viz2d::Viz2D;
 
     //Render using OpenGL
-    v2d->gl(render_scene);
+    v2d->gl([](Viz2D& v2d, const cv::Size& sz){
+        render_scene(sz);
+    });
+
 
 //To slow for wasm
 #ifndef __EMSCRIPTEN__
     //Aquire the frame buffer for use by OpenCL
-    v2d->clgl([](cv::UMat &frameBuffer) {
+    v2d->clgl([](Viz2D& v2d, cv::UMat &frameBuffer) {
         //Glow effect (OpenCL)
-        glow_effect(frameBuffer, frameBuffer, kernel_size);
+        glow_effect(v2d, frameBuffer, frameBuffer, kernel_size);
     });
 #endif
-    update_fps(v2d, true);
+    update_fps(*v2d, true);
 #ifndef __EMSCRIPTEN__
     v2d->write();
 #endif
@@ -236,7 +238,10 @@ int main(int argc, char **argv) {
 #ifndef __EMSCRIPTEN__
     v2d->makeVAWriter(OUTPUT_FILENAME, cv::VideoWriter::fourcc('V', 'P', '9', '0'), FPS, v2d->getFrameBufferSize(), 0);
 #endif
-
+    //Reinitialize the scene on every frame because nvg interfers
+    v2d->gl([](Viz2D& v2d, const cv::Size& sz){
+        init_scene(sz);
+    });
 #ifndef __EMSCRIPTEN__
     while(true)
         iteration();
