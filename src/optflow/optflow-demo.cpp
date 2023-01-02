@@ -386,79 +386,73 @@ void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d) {
 
 std::vector<kb::viz2d::Task> plan(kb::viz2d::Viz2DWorker& worker) {
     using namespace kb::viz2d;
-    std::vector<Task> tasks;
+    return {
+        worker.clgl("prepare", [](Storage& storage, cv::UMat& frameBuffer) {
+            cv::UMat& down = storage.output("down");
+            cv::UMat& background = storage.output("background");
 
-    tasks.push_back(worker.clgl("prepare", [](Storage& storage, cv::UMat& frameBuffer) {
-        cv::UMat& down = storage.output("down");
-        cv::UMat& background = storage.output("background");
+            const float& fgScale = storage.property<float>("fgScale");
 
-        const float& fgScale = storage.property<float>("fgScale");
+            cv::resize(frameBuffer, down, cv::Size(frameBuffer.size().width * fgScale, frameBuffer.size().height * fgScale));
+            frameBuffer.copyTo(background);
+        }),
+        worker.cl("detect", [](Storage& storage) {
+            const cv::UMat& down = storage.input("down");
+            cv::UMat& downNextGrey = storage.output("downNextGrey");
+            cv::UMat& downMotionMaskGrey = storage.output("downMotionMaskGrey");
 
-        cv::resize(frameBuffer, down, cv::Size(frameBuffer.size().width * fgScale, frameBuffer.size().height * fgScale));
-        frameBuffer.copyTo(background);
-    }));
+            auto& detectedPoints = storage.output<vector<cv::Point2f>>("detectedPoints");
 
-    tasks.push_back(worker.cl("detect", [](Storage& storage) {
-        const cv::UMat& down = storage.input("down");
-        cv::UMat& downNextGrey = storage.output("downNextGrey");
-        cv::UMat& downMotionMaskGrey = storage.output("downMotionMaskGrey");
+            cv::cvtColor(down, downNextGrey, cv::COLOR_RGBA2GRAY);
+            //Subtract the background to create a motion mask
+            prepare_motion_mask(storage, downNextGrey, downMotionMaskGrey);
+            //Detect trackable points in the motion mask
+            detect_points(storage, downMotionMaskGrey, detectedPoints);
+        }),
+        worker.nvg("optflow", [](Storage& storage, const cv::Size& sz) {
+            const cv::UMat& downMotionMaskGrey = storage.input("downMotionMaskGrey");
+            const cv::UMat& downPrevGrey = storage.input("downPrevGrey");
+            const cv::UMat& downNextGrey = storage.input("downNextGrey");
 
-        auto& detectedPoints = storage.output<vector<cv::Point2f>>("detectedPoints");
+            const auto& detectedPoints = storage.input<vector<cv::Point2f>>("detectedPoints");
 
-        cv::cvtColor(down, downNextGrey, cv::COLOR_RGBA2GRAY);
-        //Subtract the background to create a motion mask
-        prepare_motion_mask(storage, downNextGrey, downMotionMaskGrey);
-        //Detect trackable points in the motion mask
-        detect_points(storage, downMotionMaskGrey, detectedPoints);
-    }));
+            const float& sceneThresh = storage.property<float>("sceneThresh");
+            const float& sceneThreshDiff = storage.property<float>("sceneThreshDiff");
+            const float& alpha = storage.property<float>("alpha");
+            const float& fgScale = storage.property<float>("fgScale");
+            const float& maxStroke = storage.property<int>("maxStroke");
+            const float& maxPoints = storage.property<int>("maxPoints");
+            const float& pointLoss = storage.property<float>("pointLoss");
+            const nanogui::Color& c = storage.property<nanogui::Color>("color");
 
-    tasks.push_back(worker.nvg("vizOptflow", [](Storage& storage, const cv::Size& sz) {
-        const cv::UMat& downMotionMaskGrey = storage.input("downMotionMaskGrey");
-        const cv::UMat& downPrevGrey = storage.input("downPrevGrey");
-        const cv::UMat& downNextGrey = storage.input("downNextGrey");
-
-        const auto& detectedPoints = storage.input<vector<cv::Point2f>>("detectedPoints");
-
-        const float& sceneThresh = storage.property<float>("sceneThresh");
-        const float& sceneThreshDiff = storage.property<float>("sceneThreshDiff");
-        const float& alpha = storage.property<float>("alpha");
-        const float& fgScale = storage.property<float>("fgScale");
-        const float& maxStroke = storage.property<int>("maxStroke");
-        const float& maxPoints = storage.property<int>("maxPoints");
-        const float& pointLoss = storage.property<float>("pointLoss");
-        const nanogui::Color& c = storage.property<nanogui::Color>("color");
-
-        nvg::clear();
-        if (!downPrevGrey.empty()) {
-            //We don't want the algorithm to get out of hand when there is a scene change, so we suppress it when we detect one.
-            if (!detect_scene_change(storage, downMotionMaskGrey, sceneThresh, sceneThreshDiff)) {
-                //Visualize the sparse optical flow using nanovg
-                cv::Scalar color = cv::Scalar(c.b() * 255.0f, c.g() * 255.0f, c.r() * 255.0f, alpha * 255.0f);
-                visualize_sparse_optical_flow(storage, downPrevGrey, downNextGrey, detectedPoints, fgScale, maxStroke, color, maxPoints, pointLoss);
+            nvg::clear();
+            if (!downPrevGrey.empty()) {
+                //We don't want the algorithm to get out of hand when there is a scene change, so we suppress it when we detect one.
+                if (!detect_scene_change(storage, downMotionMaskGrey, sceneThresh, sceneThreshDiff)) {
+                    //Visualize the sparse optical flow using nanovg
+                    cv::Scalar color = cv::Scalar(c.b() * 255.0f, c.g() * 255.0f, c.r() * 255.0f, alpha * 255.0f);
+                    visualize_sparse_optical_flow(storage, downPrevGrey, downNextGrey, detectedPoints, fgScale, maxStroke, color, maxPoints, pointLoss);
+                }
             }
-        }
-    }));
+        }),
+        worker.cl("clone", [](Storage& storage){
+            storage.output("downPrevGrey") = storage.input("downNextGrey").clone();
+        }),
+        worker.clgl("composite", [](Storage& storage, cv::UMat& frameBuffer){
+            cv::UMat& foreground = storage.allocSharedOutput("foreground", frameBuffer.size(), frameBuffer.type(), cv::Scalar::all(0));
+            const cv::UMat& background = storage.input("background");
 
-    tasks.push_back(worker.cl("clone", [](Storage& storage){
-        storage.output("downPrevGrey") = storage.input("downNextGrey").clone();
-    }));
+            const int& ksize = storage.property<int>("ksize");
+            const float& fgLoss = storage.property<float>("fgLoss");
+            const int& bloomThresh = storage.property<int>("bloomThresh");
+            const float& bloomGain = storage.property<float>("bloomGain");
+            const BackgroundModes& bgMode = storage.property<BackgroundModes>("bgMode");
+            const PostProcModes& ppMode = storage.property<PostProcModes>("ppMode");
 
-    tasks.push_back(worker.clgl("composite", [](Storage& storage, cv::UMat& frameBuffer){
-        cv::UMat& foreground = storage.allocSharedOutput("foreground", frameBuffer.size(), frameBuffer.type(), cv::Scalar::all(0));
-        const cv::UMat& background = storage.input("background");
-
-        const int& ksize = storage.property<int>("ksize");
-        const float& fgLoss = storage.property<float>("fgLoss");
-        const int& bloomThresh = storage.property<int>("bloomThresh");
-        const float& bloomGain = storage.property<float>("bloomGain");
-        const BackgroundModes& bgMode = storage.property<BackgroundModes>("bgMode");
-        const PostProcModes& ppMode = storage.property<PostProcModes>("ppMode");
-
-        //Put it all together (OpenCL)
-        composite_layers(storage, background, foreground, frameBuffer, frameBuffer, ksize, fgLoss, bgMode, ppMode, bloomThresh, bloomGain);
-    }));
-
-    return tasks;
+            //Put it all together (OpenCL)
+            composite_layers(storage, background, foreground, frameBuffer, frameBuffer, ksize, fgLoss, bgMode, ppMode, bloomThresh, bloomGain);
+        })
+    };
 }
 
 bool done;
@@ -470,8 +464,8 @@ void start_midi(int port) {
     std::thread midiThread([=]() {
         MidiReceiver midi(port);
         while (!done) {
-                postEvents(midi.receive());
-                usleep(10000);
+            postEvents(midi.receive());
+            usleep(10000);
         }
     });
     midiThread.detach();
