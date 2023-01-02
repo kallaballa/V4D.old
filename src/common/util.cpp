@@ -1,7 +1,7 @@
 #include "util.hpp"
 
-#include "viz2d.hpp"
 #include "nvg.hpp"
+#include "viz2dworker.hpp"
 
 namespace kb {
 namespace viz2d {
@@ -40,10 +40,10 @@ void print_system_info() {
     cerr << "OpenCL Platforms: " << get_cl_info() << endl;
 }
 
-void update_fps(kb::viz2d::Viz2D& v2d, bool graphically) {
-    auto& cnt = v2d.local<uint64_t>("cnt");
-    auto& tick = v2d.local<cv::TickMeter>("tick");
-    auto& fps = v2d.local<float>("fps");
+void update_fps(kb::viz2d::Storage& storage) {
+    auto& cnt = storage.local<uint64_t>("cnt");
+    auto& tick = storage.local<cv::TickMeter>("tick");
+    auto& fps = storage.local<float>("fps");
     if (cnt > 0) {
         tick.stop();
 
@@ -56,23 +56,6 @@ void update_fps(kb::viz2d::Viz2D& v2d, bool graphically) {
 #endif
             cnt = 0;
             tick.reset();
-        }
-
-        if (graphically) {
-            v2d.nvg([&](kb::viz2d::Viz2D& v2d, const cv::Size &size) {
-                using namespace kb::viz2d::nvg;
-                string txt = "FPS: " + std::to_string(fps);
-                beginPath();
-                roundedRect(5, 5, 15 * txt.size() + 5, 30, 5);
-                fillColor(cv::Scalar(255, 255, 255, 180));
-                fill();
-
-                fontSize(30.0f);
-                fontFace("mono");
-                fillColor(cv::Scalar(90, 90, 90, 255));
-                textAlign(NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
-                text(10, 20, txt.c_str(), nullptr);
-            });
         }
     }
 

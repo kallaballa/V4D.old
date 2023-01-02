@@ -1,9 +1,12 @@
+
 #define CL_TARGET_OPENCL_VERSION 120
 
 #include "../common/viz2d.hpp"
 #include "../common/nvg.hpp"
 #include "../common/util.hpp"
+#include "../common/detail/taskpool.hpp"
 #include "../ext/midiplayback.hpp"
+#include "../ext/timetracker.hpp"
 
 #include <cmath>
 #include <csignal>
@@ -52,11 +55,14 @@ constexpr const char* OUTPUT_FILENAME = "optflow-demo.mkv";
 constexpr bool OFFSCREEN = false;
 constexpr int VA_HW_DEVICE_INDEX = 0;
 constexpr size_t FPS = 30;
+#ifndef __EMSCRIPTEN__
+const size_t NUM_WORKERS = 4;
+#else
+const size_t NUM_WORKERS = 4;
+#endif
 
-std::vector<MidiEvent> EVENTS;
-std::mutex EV_MTX;
+static cv::Ptr<kb::viz2d::Viz2D> v2d = new kb::viz2d::Viz2D(NUM_WORKERS, cv::Size(WIDTH, HEIGHT), cv::Size(WIDTH, HEIGHT), OFFSCREEN, "Sparse Optical Flow Demo");
 
-cv::Ptr<kb::viz2d::Viz2D> v2d = new kb::viz2d::Viz2D(cv::Size(WIDTH, HEIGHT), cv::Size(WIDTH, HEIGHT), OFFSCREEN, "Sparse Optical Flow Demo");
 #ifdef __EMSCRIPTEN__
 #  include <emscripten.h>
 #  include <emscripten/bind.h>
@@ -71,7 +77,7 @@ std::string pushImage(std::string filename){
         auto length = fs.tellg();
         fs.seekg (0, std::ios::beg);
 
-        v2d->capture([&](cv::UMat &videoFrame) {
+        source->capture([&](cv::UMat &videoFrame) {
             if(videoFrame.empty())
                 videoFrame.create(HEIGHT, WIDTH, CV_8UC4);
             cv::Mat tmp = videoFrame.getMat(cv::ACCESS_WRITE);
@@ -91,33 +97,29 @@ EMSCRIPTEN_BINDINGS(my_module)
 #endif
 
 void postEvents(const std::vector<MidiEvent> &events) {
-    std::vector<std::string> names = v2d->names();
-    for(const auto& ev: events) {
-        if(ev.controller_ - 12 < names.size()) {
-            cerr << names[ev.controller_ - 12] << ":" << ev.value_ << endl;
-            v2d->propagate(names[ev.controller_ - 12], ev.value_, 127.0);
+    for (const auto &ev : events) {
+        std::vector<std::string> names = v2d->properties().names();
+
+        for (size_t i = 0; i < NUM_WORKERS; ++i) {
+            if (ev.controller_ >= 12 && (size_t(ev.controller_) - 12) < names.size()) {
+                cerr << names[ev.controller_ - 12] << ":" << ev.value_ << endl;
+                v2d->propagate(names[ev.controller_ - 12], ev.value_, 127.0);
+            }
         }
     }
 }
 
-void prepare_motion_mask(kb::viz2d::Viz2D& v2d, const cv::UMat& srcGrey, cv::UMat& motionMaskGrey) {
-    auto& bgSubtractor = v2d.local<cv::Ptr<cv::BackgroundSubtractor>>("bgSubtractor");
-    if(bgSubtractor.empty())
-        bgSubtractor = cv::createBackgroundSubtractorMOG2(100, 16.0, false);
-
-    auto& element = v2d.local<cv::Mat>("element");
-    if(element.empty())
-        element = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(2 * 1 + 1, 2 * 1 + 1), cv::Point(1, 1));
+void prepare_motion_mask(kb::viz2d::Storage& storage, const cv::UMat& srcGrey, cv::UMat& motionMaskGrey) {
+    auto& bgSubtractor = storage.local<cv::Ptr<cv::BackgroundSubtractorMOG2>>("bgSubtractor", cv::createBackgroundSubtractorMOG2(100, 16.0, false));
+    auto& element = storage.local<cv::Mat>("element", cv::getStructuringElement(cv::MORPH_RECT, cv::Size(2 * 1 + 1, 2 * 1 + 1), cv::Point(1, 1)));
 
     bgSubtractor->apply(srcGrey, motionMaskGrey);
     cv::morphologyEx(motionMaskGrey, motionMaskGrey, cv::MORPH_OPEN, element, cv::Point(element.cols >> 1, element.rows >> 1), 2, cv::BORDER_CONSTANT, cv::morphologyDefaultBorderValue());
 }
 
-void detect_points(kb::viz2d::Viz2D& v2d, const cv::UMat& srcMotionMaskGrey, vector<cv::Point2f>& points) {
-    auto& detector = v2d.local<cv::Ptr<cv::FastFeatureDetector>>("detector");
-    if(detector.empty())
-        detector = cv::FastFeatureDetector::create(1, false);
-    auto& tmpKeyPoints = v2d.local<vector<cv::KeyPoint>>("tmpKeyPoints");
+void detect_points(kb::viz2d::Storage& storage, const cv::UMat& srcMotionMaskGrey, vector<cv::Point2f>& points) {
+    auto& detector = storage.local<cv::Ptr<cv::FastFeatureDetector>>("detector", cv::FastFeatureDetector::create(1, false));
+    auto& tmpKeyPoints = storage.local<vector<cv::KeyPoint>>("tmpKeyPoints");
 
     tmpKeyPoints.clear();
     detector->detect(srcMotionMaskGrey, tmpKeyPoints);
@@ -128,8 +130,8 @@ void detect_points(kb::viz2d::Viz2D& v2d, const cv::UMat& srcMotionMaskGrey, vec
     }
 }
 
-bool detect_scene_change(kb::viz2d::Viz2D& v2d, const cv::UMat& srcMotionMaskGrey, const float& thresh, const float& theshDiff) {
-    auto& lastMovement = v2d.local<float>("lastMovement");
+bool detect_scene_change(kb::viz2d::Storage& storage, const cv::UMat& srcMotionMaskGrey, const float& thresh, const float& theshDiff) {
+    auto& lastMovement = storage.local<float>("lastMovement");
 
     float movement = cv::countNonZero(srcMotionMaskGrey) / double(srcMotionMaskGrey.cols * srcMotionMaskGrey.rows);
     float relation = movement > 0 && lastMovement > 0 ? std::max(movement, lastMovement) / std::min(movement, lastMovement) : 0;
@@ -142,19 +144,17 @@ bool detect_scene_change(kb::viz2d::Viz2D& v2d, const cv::UMat& srcMotionMaskGre
     return result;
 }
 
-void visualize_sparse_optical_flow(kb::viz2d::Viz2D& v2d, const cv::UMat &prevGrey, const cv::UMat &nextGrey, const vector<cv::Point2f> &detectedPoints, const float scaleFactor, const int maxStrokeSize, const cv::Scalar color, const int maxPoints, const float pointLossPercent) {
-    auto& hull = v2d.local<vector<cv::Point2f>>("hull");
-    auto& prevPoints = v2d.local<vector<cv::Point2f>>("prevPoints");
-    auto& nextPoints = v2d.local<vector<cv::Point2f>>("nextPoints");
-    auto& newPoints = v2d.local<vector<cv::Point2f>>("newPoints");
-    auto& upPrevPoints = v2d.local<vector<cv::Point2f>>("upPrevPoints");
-    auto& upNextPoints = v2d.local<vector<cv::Point2f>>("upNextPoints");
-    auto& status = v2d.local<vector<uchar>>("status");
-    auto& err = v2d.local<vector<float>>("err");
-    auto& rd = v2d.local<std::random_device>("rd");
-    auto& g = v2d.local<cv::Ptr<std::mt19937>>("g");
-    if(g.empty())
-        g = new std::mt19937(rd());
+void visualize_sparse_optical_flow(kb::viz2d::Storage& storage, const cv::UMat &prevGrey, const cv::UMat &nextGrey, const vector<cv::Point2f> &detectedPoints, const float scaleFactor, const int maxStrokeSize, const cv::Scalar color, const int maxPoints, const float pointLossPercent) {
+    auto& hull = storage.local<vector<cv::Point2f>>("hull");
+    auto& prevPoints = storage.local<vector<cv::Point2f>>("prevPoints");
+    auto& nextPoints = storage.local<vector<cv::Point2f>>("nextPoints");
+    auto& newPoints = storage.local<vector<cv::Point2f>>("newPoints");
+    auto& upPrevPoints = storage.local<vector<cv::Point2f>>("upPrevPoints");
+    auto& upNextPoints = storage.local<vector<cv::Point2f>>("upNextPoints");
+    auto& status = storage.local<vector<uchar>>("status");
+    auto& err = storage.local<vector<float>>("err");
+    auto& rd = storage.local<std::random_device>("rd");
+    auto& g = storage.local<cv::Ptr<std::mt19937>>("g", new std::mt19937(rd()));
 
     if (detectedPoints.size() > 4) {
         cv::convexHull(detectedPoints, hull);
@@ -207,13 +207,13 @@ void visualize_sparse_optical_flow(kb::viz2d::Viz2D& v2d, const cv::UMat &prevGr
     }
 }
 
-void bloom(kb::viz2d::Viz2D& v2d, const cv::UMat& src, cv::UMat &dst, int ksize = 3, int threshValue = 235, float gain = 4) {
-    cv::UMat& bgr = v2d.local("bgr");
-    cv::UMat& hls = v2d.local("hls");
-    cv::UMat& ls16 = v2d.local("ls16");
-    cv::UMat& ls = v2d.local("ls");
-    cv::UMat& blur = v2d.local("blur");
-    std::vector<cv::UMat>& hlsChannels = v2d.local<std::vector<cv::UMat>>("hlsChannels");
+void bloom(kb::viz2d::Storage& storage, const cv::UMat& src, cv::UMat &dst, int ksize = 3, int threshValue = 235, float gain = 4) {
+    cv::UMat& bgr = storage.local("bgr");
+    cv::UMat& hls = storage.local("hls");
+    cv::UMat& ls16 = storage.local("ls16");
+    cv::UMat& ls = storage.local("ls");
+    cv::UMat& blur = storage.local("blur");
+    std::vector<cv::UMat>& hlsChannels = storage.local<std::vector<cv::UMat>>("hlsChannels");
 
     cv::cvtColor(src, bgr, cv::COLOR_BGRA2RGB);
     cv::cvtColor(bgr, hls, cv::COLOR_BGR2HLS);
@@ -230,10 +230,10 @@ void bloom(kb::viz2d::Viz2D& v2d, const cv::UMat& src, cv::UMat &dst, int ksize 
     addWeighted(src, 1.0, blur, gain, 0, dst);
 }
 
-void glow_effect(kb::viz2d::Viz2D& v2d, const cv::UMat &src, cv::UMat &dst, const int ksize) {
-    cv::UMat& resize = v2d.local("resize");
-    cv::UMat& blur = v2d.local("blur");
-    cv::UMat& dst16 = v2d.local("dst16");
+void glow_effect(kb::viz2d::Storage& storage, const cv::UMat &src, cv::UMat &dst, const int ksize) {
+    cv::UMat& resize = storage.local("resize");
+    cv::UMat& blur = storage.local("blur");
+    cv::UMat& dst16 = storage.local("dst16");
 
     cv::bitwise_not(src, dst);
 
@@ -252,12 +252,12 @@ void glow_effect(kb::viz2d::Viz2D& v2d, const cv::UMat &src, cv::UMat &dst, cons
     cv::bitwise_not(dst, dst);
 }
 
-void composite_layers(kb::viz2d::Viz2D& v2d, const cv::UMat& background, const cv::UMat& foreground, const cv::UMat& frameBuffer, cv::UMat& dst, int kernelSize, float fgLossPercent, BackgroundModes bgMode, PostProcModes ppMode, int bloomThresh, float bloomGain) {
-    cv::UMat& backgroundGrey = v2d.local("backgroundGrey");
-    cv::UMat& newBackground = v2d.allocLocal("newBackground", background.size(), background.type(), cv::Scalar::all(0));
-    cv::UMat& tmp = v2d.local("tmp");
-    cv::UMat& post = v2d.local("post");
-    vector<cv::UMat>& channels = v2d.local<vector<cv::UMat>>("hsvChannels");
+void composite_layers(kb::viz2d::Storage& storage, const cv::UMat& background, cv::UMat& foreground, const cv::UMat& frameBuffer, cv::UMat& dst, int kernelSize, float fgLossPercent, BackgroundModes bgMode, PostProcModes ppMode, int bloomThresh, float bloomGain) {
+    cv::UMat& backgroundGrey = storage.local("backgroundGrey");
+    cv::UMat& newBackground = storage.allocLocal("newBackground", background.size(), background.type(), cv::Scalar::all(0));
+    cv::UMat& tmp = storage.local("tmp");
+    cv::UMat& post = storage.local("post");
+    vector<cv::UMat>& channels = storage.local<vector<cv::UMat>>("hsvChannels");
 
     cv::subtract(foreground, cv::Scalar::all(255.0f * (fgLossPercent / 100.0f)), foreground);
     cv::add(foreground, frameBuffer, foreground);
@@ -285,10 +285,10 @@ void composite_layers(kb::viz2d::Viz2D& v2d, const cv::UMat& background, const c
 
     switch (ppMode) {
     case GLOW:
-        glow_effect(v2d, foreground, post, kernelSize);
+        glow_effect(storage, foreground, post, kernelSize);
         break;
     case BLOOM:
-        bloom(v2d, foreground, post, kernelSize, bloomThresh, bloomGain);
+        bloom(storage, foreground, post, kernelSize, bloomThresh, bloomGain);
         break;
     case NONE:
         foreground.copyTo(post);
@@ -384,95 +384,81 @@ void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d) {
 #endif
 }
 
-void iteration() {
+std::vector<kb::viz2d::Task> plan(kb::viz2d::Viz2DWorker& worker) {
     using namespace kb::viz2d;
+    std::vector<Task> tasks;
 
-//    if(v2d->isAccelerated() != v2d->property<bool>("hwEnable"))
-//        v2d->setAccelerated(false);
+    tasks.push_back(worker.clgl("prepare", [](Storage& storage, cv::UMat& frameBuffer) {
+        cv::UMat& down = storage.output("down");
+        cv::UMat& background = storage.output("background");
 
-#ifndef __EMSCRIPTEN__
-    if(!v2d->capture())
-        exit(0);
-#endif
-    v2d->clgl([](Viz2D& v2d, cv::UMat& frameBuffer) {
-        cv::UMat& down = v2d.output("down");
-        cv::UMat& background = v2d.output("background");
-
-        const float& fgScale = v2d.property<float>("fgScale");
+        const float& fgScale = storage.property<float>("fgScale");
 
         cv::resize(frameBuffer, down, cv::Size(frameBuffer.size().width * fgScale, frameBuffer.size().height * fgScale));
         frameBuffer.copyTo(background);
-    });
+    }));
 
-    v2d->cl([](Viz2D& v2d) {
-        const cv::UMat& down = v2d.input("down");
-        cv::UMat& downNextGrey = v2d.output("downNextGrey");
-        cv::UMat& downMotionMaskGrey = v2d.output("downMotionMaskGrey");
+    tasks.push_back(worker.cl("detect", [](Storage& storage) {
+        const cv::UMat& down = storage.input("down");
+        cv::UMat& downNextGrey = storage.output("downNextGrey");
+        cv::UMat& downMotionMaskGrey = storage.output("downMotionMaskGrey");
 
-        auto& detectedPoints = v2d.output<vector<cv::Point2f>>("detectedPoints");
+        auto& detectedPoints = storage.output<vector<cv::Point2f>>("detectedPoints");
 
         cv::cvtColor(down, downNextGrey, cv::COLOR_RGBA2GRAY);
         //Subtract the background to create a motion mask
-        prepare_motion_mask(v2d, downNextGrey, downMotionMaskGrey);
+        prepare_motion_mask(storage, downNextGrey, downMotionMaskGrey);
         //Detect trackable points in the motion mask
-        detect_points(v2d, downMotionMaskGrey, detectedPoints);
-    });
+        detect_points(storage, downMotionMaskGrey, detectedPoints);
+    }));
 
-    v2d->nvg([](Viz2D& v2d, const cv::Size& sz) {
-        const cv::UMat& downMotionMaskGrey = v2d.input("downMotionMaskGrey");
-        const cv::UMat& downPrevGrey = v2d.input("downPrevGrey");
-        const cv::UMat& downNextGrey = v2d.input("downNextGrey");
+    tasks.push_back(worker.nvg("vizOptflow", [](Storage& storage, const cv::Size& sz) {
+        const cv::UMat& downMotionMaskGrey = storage.input("downMotionMaskGrey");
+        const cv::UMat& downPrevGrey = storage.input("downPrevGrey");
+        const cv::UMat& downNextGrey = storage.input("downNextGrey");
 
-        const auto& detectedPoints = v2d.input<vector<cv::Point2f>>("detectedPoints");
+        const auto& detectedPoints = storage.input<vector<cv::Point2f>>("detectedPoints");
 
-        const float& sceneThresh = v2d.property<float>("sceneThresh");
-        const float& sceneThreshDiff = v2d.property<float>("sceneThreshDiff");
-        const float& alpha = v2d.property<float>("alpha");
-        const float& fgScale = v2d.property<float>("fgScale");
-        const float& maxStroke = v2d.property<int>("maxStroke");
-        const float& maxPoints = v2d.property<int>("maxPoints");
-        const float& pointLoss = v2d.property<float>("pointLoss");
-        const nanogui::Color& c = v2d.property<nanogui::Color>("color");
+        const float& sceneThresh = storage.property<float>("sceneThresh");
+        const float& sceneThreshDiff = storage.property<float>("sceneThreshDiff");
+        const float& alpha = storage.property<float>("alpha");
+        const float& fgScale = storage.property<float>("fgScale");
+        const float& maxStroke = storage.property<int>("maxStroke");
+        const float& maxPoints = storage.property<int>("maxPoints");
+        const float& pointLoss = storage.property<float>("pointLoss");
+        const nanogui::Color& c = storage.property<nanogui::Color>("color");
 
         nvg::clear();
         if (!downPrevGrey.empty()) {
             //We don't want the algorithm to get out of hand when there is a scene change, so we suppress it when we detect one.
-            if (!detect_scene_change(v2d, downMotionMaskGrey, sceneThresh, sceneThreshDiff)) {
+            if (!detect_scene_change(storage, downMotionMaskGrey, sceneThresh, sceneThreshDiff)) {
                 //Visualize the sparse optical flow using nanovg
                 cv::Scalar color = cv::Scalar(c.b() * 255.0f, c.g() * 255.0f, c.r() * 255.0f, alpha * 255.0f);
-                visualize_sparse_optical_flow(v2d, downPrevGrey, downNextGrey, detectedPoints, fgScale, maxStroke, color, maxPoints, pointLoss);
+                visualize_sparse_optical_flow(storage, downPrevGrey, downNextGrey, detectedPoints, fgScale, maxStroke, color, maxPoints, pointLoss);
             }
         }
-    });
+    }));
 
-    v2d->cl([](Viz2D& v2d){
-        v2d.output("downPrevGrey") = v2d.input("downNextGrey").clone();
-    });
+    tasks.push_back(worker.cl("clone", [](Storage& storage){
+        storage.output("downPrevGrey") = storage.input("downNextGrey").clone();
+    }));
 
-    v2d->clgl([](Viz2D& v2d, cv::UMat& frameBuffer){
-        const cv::UMat& foreground = v2d.allocInput("foreground", frameBuffer.size(), frameBuffer.type(), cv::Scalar::all(0));
-        const cv::UMat& background = v2d.input("background");
+    tasks.push_back(worker.clgl("composite", [](Storage& storage, cv::UMat& frameBuffer){
+        cv::UMat& foreground = storage.allocSharedOutput("foreground", frameBuffer.size(), frameBuffer.type(), cv::Scalar::all(0));
+        const cv::UMat& background = storage.input("background");
 
-        const int& ksize = v2d.property<int>("ksize");
-        const float& fgLoss = v2d.property<float>("fgLoss");
-        const int& bloomThresh = v2d.property<int>("bloomThresh");
-        const float& bloomGain = v2d.property<float>("bloomGain");
-        const BackgroundModes& bgMode = v2d.property<BackgroundModes>("bgMode");
-        const PostProcModes& ppMode = v2d.property<PostProcModes>("ppMode");
+        const int& ksize = storage.property<int>("ksize");
+        const float& fgLoss = storage.property<float>("fgLoss");
+        const int& bloomThresh = storage.property<int>("bloomThresh");
+        const float& bloomGain = storage.property<float>("bloomGain");
+        const BackgroundModes& bgMode = storage.property<BackgroundModes>("bgMode");
+        const PostProcModes& ppMode = storage.property<PostProcModes>("ppMode");
 
         //Put it all together (OpenCL)
-        composite_layers(v2d, background, foreground, frameBuffer, frameBuffer, ksize, fgLoss, bgMode, ppMode, bloomThresh, bloomGain);
-    });
+        composite_layers(storage, background, foreground, frameBuffer, frameBuffer, ksize, fgLoss, bgMode, ppMode, bloomThresh, bloomGain);
+    }));
 
-    update_fps(*v2d, v2d->property<bool>("showFPS"));
-
-#ifndef __EMSCRIPTEN__
-    v2d->write();
-#endif
-
-    //If onscreen rendering is enabled it displays the framebuffer in the native window. Returns false if the window was closed.
-    if(!v2d->display())
-        exit(0);
+    return tasks;
 }
 
 bool done;
@@ -525,8 +511,11 @@ int main(int argc, char **argv) {
     float height = capture.get(cv::CAP_PROP_FRAME_HEIGHT);
 
     v2d->makeVAWriter(OUTPUT_FILENAME, cv::VideoWriter::fourcc('V', 'P', '9', '0'), fps, cv::Size(width, height), VA_HW_DEVICE_INDEX);
+
+    v2d->prepare(plan);
+
     while (!done) {
-        iteration();
+        v2d->work();
     }
 #else
     emscripten_set_main_loop(iteration, -1, false);

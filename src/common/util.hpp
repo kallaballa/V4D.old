@@ -8,11 +8,11 @@
 
 namespace kb {
 namespace viz2d {
-class Viz2D;
+class Viz2DWorker;
 std::string get_gl_info();
 std::string get_cl_info();
 void print_system_info();
-void update_fps(Viz2D& viz2d, bool graphical);
+void update_fps(Viz2DWorker& viz2d);
 }
 }
 

@@ -1,6 +1,6 @@
 #include "clglcontext.hpp"
 #include "../util.hpp"
-#include "../viz2d.hpp"
+#include "../viz2dworker.hpp"
 
 namespace kb {
 namespace viz2d {
@@ -47,13 +47,13 @@ cv::Size CLGLContext::getSize() {
     return frameBufferSize_;
 }
 
-void CLGLContext::execute(Viz2D& v2d, std::function<void(Viz2D&, cv::UMat&)> fn) {
+void CLGLContext::execute(Storage& storage, std::function<void(Storage&, cv::UMat&)> fn) {
 #ifndef __EMSCRIPTEN__
     CLExecScope_t clExecScope(getCLExecContext());
 #endif
     CLGLContext::GLScope glScope(*this);
     CLGLContext::FrameBufferScope fbScope(*this, frameBuffer_);
-    fn(v2d, frameBuffer_);
+    fn(storage, frameBuffer_);
 }
 
 cv::ogl::Texture2D& CLGLContext::getTexture2D() {

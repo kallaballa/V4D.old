@@ -1,6 +1,6 @@
 #define CL_TARGET_OPENCL_VERSION 120
 
-#include "../common/viz2d.hpp"
+#include "../common/viz2dworker.hpp"
 #include "../common/nvg.hpp"
 #include "../common/util.hpp"
 
@@ -30,7 +30,7 @@ constexpr float UNSHARP_STRENGTH = 3.0f;
 constexpr int REDUCE_SHADOW = 5; //percent
 constexpr int DILATE_ITERATIONS = 1;
 
-static cv::Ptr<kb::viz2d::Viz2D> v2d = new kb::viz2d::Viz2D(cv::Size(WIDTH, HEIGHT), cv::Size(WIDTH, HEIGHT), OFFSCREEN, "Beauty Demo");
+static cv::Ptr<kb::viz2d::Viz2DWorker> v2d = new kb::viz2d::Viz2DWorker(cv::Size(WIDTH, HEIGHT), cv::Size(WIDTH, HEIGHT), OFFSCREEN, "Beauty Demo");
 
 using std::cerr;
 using std::endl;

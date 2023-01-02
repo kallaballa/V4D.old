@@ -17,7 +17,7 @@ namespace kb {
 namespace viz2d {
 namespace detail {
 class NanoVGContext {
-    Viz2D& v2d_;
+    Viz2DWorker& v2d_;
     NVGcontext *context_;
     CLGLContext &clglContext_;
 public:
@@ -32,8 +32,8 @@ public:
             ctx_.end();
         }
     };
-    NanoVGContext(Viz2D& v2d, NVGcontext *context, CLGLContext &fbContext);
-    void render(Viz2D& v2d, std::function<void(Viz2D&, const cv::Size&)> fn);
+    NanoVGContext(Viz2DWorker& v2d, NVGcontext *context, CLGLContext &fbContext);
+    void render(Storage& v2d, std::function<void(Storage&, const cv::Size&)> fn);
 private:
     void begin();
     void end();

@@ -1,6 +1,6 @@
 #define CL_TARGET_OPENCL_VERSION 120
 
-#include "../common/viz2d.hpp"
+#include "../common/viz2dworker.hpp"
 #include "../common/nvg.hpp"
 #include "../common/util.hpp"
 
@@ -46,12 +46,12 @@ using std::string;
 using std::vector;
 using std::istringstream;
 
-cv::Ptr<kb::viz2d::Viz2D> v2d = new kb::viz2d::Viz2D(cv::Size(WIDTH, HEIGHT), cv::Size(WIDTH, HEIGHT), OFFSCREEN, "Font Demo");
+cv::Ptr<kb::viz2d::Viz2DWorker> v2d = new kb::viz2d::Viz2DWorker(cv::Size(WIDTH, HEIGHT), cv::Size(WIDTH, HEIGHT), OFFSCREEN, "Font Demo");
 vector<string> lines;
 bool update_stars = true;
 bool update_perspective = true;
 
-void setup_gui(cv::Ptr<kb::viz2d::Viz2D> v2d) {
+void setup_gui(cv::Ptr<kb::viz2d::Viz2DWorker> v2d) {
     v2d->addWindow(5, 30, "Effect");
     v2d->addGroup("Text Crawl");
     v2d->makeFormVariable("Font Size", font_size, 1.0f, 100.0f, true, "pt", "Font size of the text crawl");

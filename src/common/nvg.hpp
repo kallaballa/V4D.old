@@ -1,7 +1,7 @@
 #ifndef SRC_COMMON_NVG_HPP_
 #define SRC_COMMON_NVG_HPP_
 
-#include "viz2d.hpp"
+#include "viz2dworker.hpp"
 #ifndef __EMSCRIPTEN__
 #define NANOGUI_USE_OPENGL
 #else
@@ -57,7 +57,7 @@ struct Paint {
 namespace detail {
 
 class NVG {
-    friend class Viz2D;
+    friend class Viz2DWorker;
     static NVG* nvg_instance_;
     NVGcontext* ctx_ = nullptr;
 

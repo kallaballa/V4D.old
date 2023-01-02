@@ -1,6 +1,7 @@
+
 #define CL_TARGET_OPENCL_VERSION 120
 
-#include "../common/viz2d.hpp"
+#include "../common/viz2dworker.hpp"
 #include "../common/util.hpp"
 
 #include <string>
@@ -87,7 +88,7 @@ int main(int argc, char **argv) {
         cerr << "Usage: video-demo <video-file>" << endl;
         exit(1);
     }
-    cv::Ptr<Viz2D> v2d = new Viz2D(cv::Size(WIDTH, HEIGHT), cv::Size(WIDTH, HEIGHT), OFFSCREEN, "Video Demo");
+    cv::Ptr<Viz2DWorker> v2d = new Viz2DWorker(cv::Size(WIDTH, HEIGHT), cv::Size(WIDTH, HEIGHT), OFFSCREEN, "Video Demo");
     print_system_info();
     if(!v2d->isOffscreen())
         v2d->setVisible(true);

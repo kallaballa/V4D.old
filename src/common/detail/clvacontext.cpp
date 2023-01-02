@@ -1,6 +1,6 @@
 #include "clvacontext.hpp"
 
-#include "../viz2d.hpp"
+#include "../viz2dworker.hpp"
 
 namespace kb {
 namespace viz2d {
@@ -62,6 +62,8 @@ void CLVAContext::write(std::function<void(const cv::UMat&)> fn) {
         CLGLContext::FrameBufferScope fbScope(clglContext_, frameBuffer_);
 
         cv::cvtColor(frameBuffer_, rgbBuffer_, cv::COLOR_BGRA2RGB);
+        if(videoFrameSize_ == cv::Size(0,0))
+            videoFrameSize_ = frameBuffer_.size();
         cv::resize(rgbBuffer_, videoFrame_, videoFrameSize_);
     }
     assert(videoFrame_.size() == videoFrameSize_);

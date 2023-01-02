@@ -5,11 +5,11 @@
 
 namespace kb {
 namespace viz2d {
-class Viz2D;
+class Viz2DWorker;
 namespace detail {
 
 class CLVAContext {
-    friend class kb::viz2d::Viz2D;
+    friend class kb::viz2d::Viz2DWorker;
     CLExecContext_t context_;
     CLGLContext &clglContext_;
     cv::UMat frameBuffer_;

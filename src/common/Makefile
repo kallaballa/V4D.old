@@ -4,7 +4,7 @@ else
 TARGET := libviz2d.so
 endif
 
-SRCS    := detail/clglcontext.cpp detail/clvacontext.cpp detail/nanovgcontext.cpp viz2d.cpp util.cpp nvg.cpp ../ext/midireceiver.cpp ../ext/midiplayback.cpp
+SRCS    := detail/clglcontext.cpp detail/clvacontext.cpp detail/nanovgcontext.cpp viz2d.cpp util.cpp nvg.cpp ../ext/midireceiver.cpp ../ext/midiplayback.cpp detail/taskpool.cpp ../ext/timetracker.cpp viz2dworker.cpp
 
 #precompiled headers
 HEADERS := 

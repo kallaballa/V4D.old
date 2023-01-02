@@ -23,7 +23,8 @@
 
 namespace kb {
 namespace viz2d {
-class Viz2D;
+class Viz2DWorker;
+class Storage;
 namespace detail {
 typedef cv::ocl::OpenCLExecutionContext CLExecContext_t;
 typedef cv::ocl::OpenCLExecutionContextScope CLExecScope_t;
@@ -31,7 +32,7 @@ typedef cv::ocl::OpenCLExecutionContextScope CLExecScope_t;
 class CLGLContext {
     friend class CLVAContext;
     friend class NanoVGContext;
-    friend class kb::viz2d::Viz2D;
+    friend class kb::viz2d::Viz2DWorker;
     GLuint frameBufferID_ = 0;
     GLuint textureID_ = 0;
     GLuint renderBufferID_ = 0;
@@ -74,7 +75,7 @@ public:
     CLGLContext(const cv::Size& frameBufferSize);
     virtual ~CLGLContext();
     cv::Size getSize();
-    void execute(Viz2D& viz2d, std::function<void(Viz2D&, cv::UMat&)> fn);
+    void execute(Storage& storage, std::function<void(Storage&, cv::UMat&)> fn);
 protected:
     void begin();
     void end();
